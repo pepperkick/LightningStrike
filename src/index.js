@@ -9,6 +9,7 @@ import request from 'request';
 import CueSDK from 'corsair-sdk';
 import Color from 'color';
 import pythonBridge from 'python-bridge';
+import Express from "express";
 
 import aura from '../build/Release/aura';
 import logitech from '../build/Release/logitech';
@@ -26,6 +27,7 @@ const rain_path = 'C:\\Users\\abhis\\Documents\\Rainmeter\\Skins\\RGBToText\\@Re
 const rain_size = 8192;
 const cue = new CueSDK.CueSDK(`${__dirname}/../files/CUESDK_2015.dll`);
 const python = pythonBridge();
+const app = new Express();
 
 let effectInterval;
 let effectFlag = false;
@@ -340,6 +342,7 @@ function setColorAll(r, g, b, o = {}) {
                 c = `${toHex(parseInt(r))}${toHex(parseInt(g))}${toHex(parseInt(b))}`;
             }
 
+            // python.ex`hue_plus.hue.custom(ser, 0, 1, [ ${c} ], "fixed", 0)`;
             python.ex`hue_plus.hue.fixed(ser, 0, 0, ${c})`
         }
     }
@@ -573,6 +576,65 @@ function rain_process(err, count, buff) {
 
     lastData = new Date();
 }
+
+app.get("/turn-on", (req, res) => {
+    disableEffect();
+    enableRainbow();
+
+    res.sendStatus(200);
+});
+
+app.get("/turn-off", (req, res) => {
+    disableEffect();
+    
+    effectFlag = true;
+
+    setColorAll(0, 0, 0);
+
+    res.sendStatus(200);
+});
+
+app.get("/color-red", (req, res) => {
+    disableEffect();
+    
+    effectFlag = true;
+
+    setColorAll(255, 0, 0);
+
+    res.sendStatus(200);
+});
+
+app.get("/color-green", (req, res) => {
+    disableEffect();
+    
+    effectFlag = true;
+
+    setColorAll(0, 255, 0);
+
+    res.sendStatus(200);
+});
+
+app.get("/color-blue", (req, res) => {
+    disableEffect();
+    
+    effectFlag = true;
+
+    setColorAll(0, 0, 255);
+
+    res.sendStatus(200);
+});
+
+app.get("/color-white", (req, res) => {
+    disableEffect();
+    
+    effectFlag = true;
+
+    setColorAll(255, 255, 255);
+
+    res.sendStatus(200);
+});
+
+app.listen(4524);
 
 function MapRazerKeys(data) { 
     for (let i in KEY_LIGHTING) {
