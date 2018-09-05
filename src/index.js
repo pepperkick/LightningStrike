@@ -1,33 +1,58 @@
 import five from 'johnny-five';
 import debug from 'debug';
-import net from 'net';
 import sleep from 'async-sleep';
 import clear from 'clear';
 import inquirer from 'inquirer';
 import fs from 'fs';
+import net from 'net';
 import request from 'request';
-import CueSDK from 'corsair-sdk';
 import Color from 'color';
 import pythonBridge from 'python-bridge';
 import Express from "express";
+import IOT from "aws-iot-device-sdk";
+import bodyParser from "body-parser";
+import MQTT from 'mqtt';
+import robot from 'robotjs';
+import * as Vibrant from 'node-vibrant'
+import EventEmitter from 'events';
 
 import aura from '../build/Release/aura';
 import logitech from '../build/Release/logitech';
+import CueSDK from './devices/corsair';
+
+import CorsairMap from "./devices/corsair/map"
+import RazerMap from "./devices/razer/map"
 
 import Rainbow from './effects/rainbow';
 import Wave from './effects/wave';
 import Walk from './effects/walk';
+import Fire from './effects/fire';
+import Water from './effects/water';
+import Random from './effects/random';
+
+import GPMDP from "./modules/gpmdp";
+import PipeRazer from "./modules/pipe-razer"
 
 import KEY from './objects/keys';
 
-const RAZER_PIPE_PATH = "\\\\.\\pipe\\artemis";
 const LOGITECH_PIPE_PATH = "\\\\.\\pipe\\lightningstrike_logitech";
 const log = debug('app');
 const rain_path = 'C:\\Users\\abhis\\Documents\\Rainmeter\\Skins\\RGBToText\\@Resources\\band.txt';
 const rain_size = 8192;
-const cue = new CueSDK.CueSDK(`${__dirname}/../files/CUESDK_2015.dll`);
+const cue = new CueSDK(`${__dirname}/../files/CUESDK_2015.dll`);
 const python = pythonBridge();
-const app = new Express();
+const express = new Express();
+
+const mqtt = MQTT.connect("mqtt://localhost");
+const app = new EventEmitter();
+
+app.express = express;
+app.effect = changeEffect;
+app.lightning = [];
+app.keys = KEY;
+
+const gpmdp = GPMDP(app);
+const pipeRazer = PipeRazer(app);
 
 let effectInterval;
 let effectFlag = false;
@@ -40,11 +65,17 @@ let board;
 let rain_file;
 let rain_lastR, rain_lastG, rain_lastB;
 let rain_flag = false;
+let lightFlag = true;
 
 aura.Init();
 logitech.Init();
 
 aura.FindMbControllers();
+
+express.use(bodyParser.json());
+express.use(bodyParser.urlencoded({
+    extended: true
+})); 
 
 setInterval(() => {
     if (maxR !== 0)
@@ -91,12 +122,12 @@ const query = () => {
             message: "Select an Option",
             choices: [
                 {
-                    name: "Sync with AURA",
-                    value: 'sync_aura'
+                    name: "Sync with Screen",
+                    value: 'sync_screen'
                 },
                 {
                     name: "Sync with Audio",
-                    value: 'sync_rain'
+                    value: 'sync_music'
                 },
                 {
                     name: "Rainbow Effect",
@@ -109,6 +140,18 @@ const query = () => {
                 {
                     name: "Walk Effect",
                     value: "effect_walk"
+                },
+                {
+                    name: "Fire Effect",
+                    value: "effect_fire"
+                },
+                {
+                    name: "Water Effect",
+                    value: "effect_water"
+                },
+                {
+                    name: "Random Fill Effect",
+                    value: "effect_random"
                 },
                 {
                     name: "Static: Off",
@@ -134,59 +177,7 @@ const query = () => {
         }
     ])
     .then(answers => {
-        if (rain_flag) {
-            rain_flag = false;
-        }
-
-        if (answers.Options === 'sync_aura') {
-            disableEffect();
-            enableAuraSync();
-        } else if (answers.Options === 'sync_rain') {    
-            disableEffect();
-
-            rain_flag = true;
-            
-            fs.open(rain_path, 'r', (err, fd) => { rain_file = fd; rain_read(); });
-        } else if (answers.Options === 'effect_rainbow') {
-            disableEffect();
-            enableRainbow();
-        } else if (answers.Options === 'effect_wave') {
-            disableEffect();
-            enableWave();
-        } else if (answers.Options === 'effect_walk') {
-            disableEffect();
-            enableWalk();
-        } else if (answers.Options === "static_off") {
-            disableEffect();
-            
-            effectFlag = true;
-
-            setColorAll(0, 0, 0);     
-        }  else if (answers.Options === "static_red") {
-            disableEffect();
-            
-            effectFlag = true;
-
-            setColorAll(255, 0, 0);     
-        } else if (answers.Options === "static_green") {
-            disableEffect();
-            
-            effectFlag = true;
-
-            setColorAll(0, 255, 0);         
-        } else if (answers.Options === "static_blue") {
-            disableEffect();
-            
-            effectFlag = true;
-
-            setColorAll(0, 0, 255);    
-        } else if (answers.Options === "static_white") {
-            disableEffect();
-            
-            effectFlag = true;
-
-            setColorAll(255, 255, 255);    
-        }
+        changeEffect(answers.Options);
 
         query();
     });
@@ -200,13 +191,13 @@ setInterval(() => {
             }
     
             disableEffect();
-            enableRainbow();
+            enableFire(app);
         }
     }
 }, 30000);
 
 function init() {
-    enableRainbow();
+    enableFire(app);
     startPipes();    
 
     python.ex`import serial`;
@@ -217,32 +208,24 @@ function init() {
 }
 
 function startPipes() {
-    const razer = net.createServer((stream) => {
-        stream.on('data', async (c) => {    
-            const values = c.toString().split(' ');
-            const color = values[47].split(',');
-    
-            if (effectFlag) {
-                disableEffect();
+    app.on("pipe-razer", (values) => {
+        if (effectFlag) {
+            disableEffect();
 
-                log(`Razer pipe disabled idle effect!`);
+            log(`Razer pipe disabled idle effect!`);
+        }
+
+        MapRazerKeys(values);
+
+        setColorAll(
+            0, 0, 0,
+            {
+                per_key: true,
+                default_key: KEY.Q
             }
+        );
 
-            setColorAll(
-                parseInt(color[2]), 
-                parseInt(color[3]), 
-                parseInt(color[4]),
-                {
-                    corsair_per_key: true
-                }
-            );
-
-            MapRazerKeys(values);
-
-            // log(c.toString());
-
-            lastData = new Date();
-        });
+        lastData = new Date();
     });
 
     const logitech = net.createServer((stream) => {
@@ -271,21 +254,34 @@ function startPipes() {
             lastData = new Date();
         });
     });
-
-    razer.listen(RAZER_PIPE_PATH, () => {
-        log('Razer pipe Started!');
-    });
     
     logitech.listen(LOGITECH_PIPE_PATH, () => {
         log('Logitech pipe Started!');
     });
  }
 
-let z = 170;
 function setColorAll(r, g, b, o = {}) {
-    if (!(o.per_key || o.corsair_per_key)) {
-        if (lastR === r && lastG === g && lastB === b) return;
+    if (!lightFlag) {
+        const l = [];
+
+        for (let i = 1; i <= 188; i++) {
+            l.push([i, 0, 0, 0]);
+        }
+
+        cue.set(l, true);
+
+        aura.SetMbColor(0, 0, 0, 0);
+
+        python.ex`hue_plus.hue.fixed(ser, 0, 0, "000000")`;
+        
+        logitech.SetColor(0, 0, 0);
+
+        return;
     }
+
+    // if (!(o.per_key || o.corsair_per_key)) {
+    //     if (lastR === r && lastG === g && lastB === b) return;
+    // }
 
     lastR = r, lastG = g, lastB = b;
 
@@ -294,10 +290,10 @@ function setColorAll(r, g, b, o = {}) {
 
         if (o.per_key || o.corsair_per_key) {
             for (let i = 1; i <= 188; i++) {
-                const key = CorsairMap[i];
+                const key = CorsairMap.Map[i];
 
-                if (key && KEY_LIGHTING[key]) {
-                    l.push([i, KEY_LIGHTING[key][0], KEY_LIGHTING[key][1], KEY_LIGHTING[key][2]]);
+                if (key && app.lightning[key]) {
+                    l.push([i, app.lightning[key][0], app.lightning[key][1], app.lightning[key][2]]);
                 } else {                 
                     l.push([i, 0, 0, 0]);
                 }
@@ -312,8 +308,20 @@ function setColorAll(r, g, b, o = {}) {
     }
 
     if (!o.no_aura) {
-        if (o.per_key && KEY_LIGHTING[KEY.AURA]) {
-            aura.SetMbColor(0, KEY_LIGHTING[KEY.AURA][0], KEY_LIGHTING[KEY.AURA][2], KEY_LIGHTING[KEY.AURA][1]);
+        if (o.per_key) {
+            if (o.default_key) {
+                aura.SetMbColor(0, 
+                    app.lightning[o.default_key][0], 
+                    app.lightning[o.default_key][2], 
+                    app.lightning[o.default_key][1]
+                );
+            } else {
+                aura.SetMbColor(0, 
+                    app.lightning[KEY.AURA][0], 
+                    app.lightning[KEY.AURA][2], 
+                    app.lightning[KEY.AURA][1]
+                );
+            }
         } else {
             if (o.bass_only) {
                 aura.SetMbColor(0, r, 0, 0);
@@ -336,47 +344,65 @@ function setColorAll(r, g, b, o = {}) {
         } else {
             let c = "000000";
 
-            if ((o.per_key || o.corsair_per_key) && KEY_LIGHTING[KEY.M] && !rain_flag) {
-                c = `${toHex(parseInt(KEY_LIGHTING[KEY.M][0]))}${toHex(parseInt(KEY_LIGHTING[KEY.M][1]))}${toHex(parseInt(KEY_LIGHTING[KEY.M][2]))}`;            
+            if (o.per_key) {
+                if (o.default_key && !rain_flag) {
+                    c = `${toHex(parseInt(app.lightning[o.default_key][0]))}${toHex(parseInt(app.lightning[o.default_key][1]))}${toHex(parseInt(app.lightning[o.default_key][2]))}`;         
+
+                    // python.ex`hue_plus.hue.custom(ser, 0, 1, [ ${c} ], "fixed", 0)`;
+                    python.ex`hue_plus.hue.fixed(ser, 0, 0, ${c})`   
+                } else {
+                    const c1 = [];
+                    const c2 = [];
+
+                    for (let i = 0; i < 20; i++) {
+                        c1[i] = `${toHex(parseInt(app.lightning[KEY[`NZXT_1_${i+1}`]][0]))}${toHex(parseInt(app.lightning[KEY[`NZXT_1_${i+1}`]][1]))}${toHex(parseInt(app.lightning[KEY[`NZXT_1_${i+1}`]][2]))}`;
+                        c2[i] = `${toHex(parseInt(app.lightning[KEY[`NZXT_2_${i+1}`]][0]))}${toHex(parseInt(app.lightning[KEY[`NZXT_2_${i+1}`]][1]))}${toHex(parseInt(app.lightning[KEY[`NZXT_2_${i+1}`]][2]))}`;
+                    }
+            
+                    python.ex`hue_plus.hue.custom(ser, 0, 1, ${c1}, "fixed", 0)`
+                    python.ex`hue_plus.hue.custom(ser, 0, 2, ${c2}, "fixed", 0)`
+                }
             } else {
                 c = `${toHex(parseInt(r))}${toHex(parseInt(g))}${toHex(parseInt(b))}`;
-            }
 
-            // python.ex`hue_plus.hue.custom(ser, 0, 1, [ ${c} ], "fixed", 0)`;
-            python.ex`hue_plus.hue.fixed(ser, 0, 0, ${c})`
+                // python.ex`hue_plus.hue.custom(ser, 0, 1, [ ${c} ], "fixed", 0)`;
+                python.ex`hue_plus.hue.fixed(ser, 0, 0, ${c})`
+            }
         }
     }
 
-    if (o.logitech_boost) {
-        if (r > maxR) maxR = r;
-        if (g > maxG) maxG = g;
-        if (b > maxB) maxB = b;
+    if (!o.no_logitech) {
+        if (o.logitech_boost) {
+            if (r > maxR) maxR = r;
+            if (g > maxG) maxG = g;
+            if (b > maxB) maxB = b;
 
-        logitech.SetColor(
-            map(r, 0, maxR, 0, 94),
-            map(g, 0, maxG, 0, 94),
-            map(b, 0, maxB, 0, 94)
-        );
-    } else {
-        if (o.per_key && KEY_LIGHTING[KEY.LOGITECH]) {
             logitech.SetColor(
-                map(KEY_LIGHTING[KEY.LOGITECH][0], 0, 255, 0, 94),
-                map(KEY_LIGHTING[KEY.LOGITECH][1], 0, 255, 0, 94),
-                map(KEY_LIGHTING[KEY.LOGITECH][2], 0, 255, 0, 94)
+                map(r, 0, maxR, 0, 94),
+                map(g, 0, maxG, 0, 94),
+                map(b, 0, maxB, 0, 94)
             );
         } else {
-            if (o.bass_only || o.logitech_bass_only) {
+            if (o.per_key && app.lightning[KEY.LOGITECH]) {
                 logitech.SetColor(
-                    map(r, 0, 255, 0, 94),
-                    0,
-                    0
+                    map(app.lightning[KEY.LOGITECH][0], 0, 255, 0, 94),
+                    map(app.lightning[KEY.LOGITECH][1], 0, 255, 0, 94),
+                    map(app.lightning[KEY.LOGITECH][2], 0, 255, 0, 94)
                 );
             } else {
-                logitech.SetColor(
-                    map(r, 0, 255, 0, 94),
-                    map(g, 0, 255, 0, 94),
-                    map(b, 0, 255, 0, 94)
-                );
+                if (o.bass_only || o.logitech_bass_only) {
+                    logitech.SetColor(
+                        map(r, 0, 255, 0, 94),
+                        0,
+                        0
+                    );
+                } else {
+                    logitech.SetColor(
+                        map(r, 0, 255, 0, 94),
+                        map(g, 0, 255, 0, 94),
+                        map(b, 0, 255, 0, 94)
+                    );
+                }
             }
         }
     }
@@ -384,6 +410,8 @@ function setColorAll(r, g, b, o = {}) {
     if (!process.env.NO_ARDUINO && !o.no_arduino) {
         arduinoRGB.color(r, g, b);
     }
+
+    mqtt.publish("rgb", [ r, g, b ].join(","));
 }
 
 function enableRainbow() {
@@ -398,6 +426,7 @@ function enableRainbow() {
         setColorAll(colors.r, colors.g, colors.b);
     }, speed);
 
+    mqtt.publish("effect", "rainbow");
     log('Enabled Idle Effect');
 }
 
@@ -413,6 +442,7 @@ function enableWave() {
         setColorAll(colors.r, colors.g, colors.b);
     }, speed);
 
+    mqtt.publish("effect", "wave");
     log('Enabled Idle Effect');
 }
 
@@ -423,21 +453,89 @@ function enableWalk() {
     dominatingPipe = null;
 
     effectInterval = setInterval(() => {
-        const data = Walk(KEY_LIGHTING);
+        const data = Walk(app.lightning);
 
         for (let i in data.keys) {
-            KEY_LIGHTING[i] = data.keys[i];
+            app.lightning[i] = data.keys[i];
         }
         
         setColorAll(0, 0, 0, {
             per_key: true
         });
     }, speed);
+    
+    mqtt.publish("effect", "fill");
+}
+
+function enableFire() {
+    const speed = 25;
+    
+    effectFlag = true;
+    dominatingPipe = null;
+
+    effectInterval = setInterval(() => {
+        const data = Fire(app);
+
+        for (let i in data.keys) {
+            app.lightning[i] = data.keys[i];
+        }
+        
+        setColorAll(0, 0, 0, {
+            per_key: true
+        });
+    }, speed);
+    
+    mqtt.publish("effect", "fire");
+}
+
+function enableWater() {
+    const speed = 25;
+    
+    effectFlag = true;
+    dominatingPipe = null;
+
+    effectInterval = setInterval(() => {
+        const data = Water(app);
+
+        for (let i in data.keys) {
+            app.lightning[i] = data.keys[i];
+        }
+        
+        setColorAll(0, 0, 0, {
+            per_key: true
+        });
+    }, speed);
+    
+    mqtt.publish("effect", "fire");
+}
+
+function enableRandom() {
+    const speed = 25;
+    
+    effectFlag = true;
+    dominatingPipe = null;
+
+    effectInterval = setInterval(() => {
+        const data = Random(app);
+
+        for (let i in data.keys) {
+            app.lightning[i] = data.keys[i];
+        }
+        
+        setColorAll(0, 0, 0, {
+            per_key: true
+        });
+    }, speed);
+    
+    mqtt.publish("effect", "fire");
 }
 
 function enableAuraSync() {
     const speed = 25;
     
+    effectFlag = true;
+    dominatingPipe = null;
+
     effectInterval = setInterval(() => {
         const colors = aura.GetMbColor(0);
 
@@ -445,6 +543,89 @@ function enableAuraSync() {
             logitech_boost: true,
             no_aura: true
         });
+
+        lastData = new Date();
+    }, speed);
+}
+
+function enableScreenSync() {
+    const speed = 10;
+
+    effectFlag = true;
+    dominatingPipe = null;
+
+    effectInterval = setInterval(() => {
+        const img = robot.captureScreen();
+        const buffer = img.image;
+
+        for (let z in SCREEN_ZONES) {
+            const zone = SCREEN_ZONES[z];
+
+            let count = 1;
+            let r = 0, g = 0, b = 0;
+
+            for (let x = zone.SX; x < zone.EX; x+=100) {
+                for (let y = zone.SY; y < zone.EY; y+=100) {
+                    const index = (x + y * 2560) * 3;
+                    
+                    if (buffer[index + 0] === undefined || buffer[index + 1] === undefined  || buffer[index + 2] === undefined) continue;
+
+                    if (
+                        parseInt(buffer[index + 0]) === 0 && 
+                        parseInt(buffer[index + 1]) === 0 && 
+                        parseInt(buffer[index + 2]) === 0)
+                    continue;
+
+                    if (
+                        parseInt(buffer[index + 0]) < 25 && 
+                        parseInt(buffer[index + 1]) < 25 && 
+                        parseInt(buffer[index + 2]) < 25)
+                    continue;
+
+                    count++;
+
+                    r += parseInt(buffer[index + 2]);
+                    g += parseInt(buffer[index + 1]);
+                    b += parseInt(buffer[index + 0]);
+                }
+            }
+
+            const colors = [ parseInt(r / count), parseInt(g / count), parseInt(b / count) ]
+
+            if (z === "TOP") {
+                setColorAll(colors[0], colors[1], colors[2], {
+                    no_arduino: true,
+                    no_corsair: true,
+                    no_nzxt: true,
+                    no_logitech: true,
+                    no_aura: false
+                });
+            } else if (z === "CENTER") {
+                setColorAll(colors[0], colors[1], colors[2], {
+                    no_arduino: true,
+                    no_corsair: true,
+                    no_nzxt: true,
+                    no_logitech: false,
+                    no_aura: true
+                });            
+            } else if (z === "RIGHT") {
+                setColorAll(colors[0], colors[1], colors[2], {
+                    no_arduino: true,
+                    no_corsair: true,
+                    no_nzxt: false,
+                    no_logitech: true,
+                    no_aura: true
+                });            
+            } else if (z === "BOTTOM") {
+                setColorAll(colors[0], colors[1], colors[2], {
+                    no_arduino: true,
+                    no_corsair: false,
+                    no_nzxt: true,
+                    no_logitech: true,
+                    no_aura: true
+                });            
+            }
+        }
 
         lastData = new Date();
     }, speed);
@@ -513,12 +694,12 @@ function rain_process(err, count, buff) {
         colors = [ data[0], data[1], data[2] ];
 
         if (perKey) {
-            for (let i in KEY_LIGHTING) {
-                KEY_LIGHTING[i] = [0, 0, 0];
+            for (let i in app.lightning) {
+                app.lightning[i] = [0, 0, 0];
             }
 
-            for (let i = 0; i < CorsairVisualizerRows.length; i++) {
-                const row = CorsairVisualizerRows[i];
+            for (let i = 0; i < CorsairMap.VisualizerRows.length; i++) {
+                const row = CorsairMap.VisualizerRows[i];
                 const data = parseFloat(parts[i+1].split("=")[1]);
                 const split = 1 / (row.length + 1);
                 let value = 0, counter = 0;
@@ -526,13 +707,13 @@ function rain_process(err, count, buff) {
                 while (value < data) {
                     if (counter >= row.length - 1) break;
 
-                    KEY_LIGHTING[row[counter]] = CorsairVisualizerRowColors[i];
+                    app.lightning[row[counter]] = CorsairMap.VisualizerRowColors[i];
 
                     value += split;
                     counter++;
                 }
 
-                const color = CorsairVisualizerRowColors[i];
+                const color = CorsairMap.VisualizerRowColors[i];
                 const partial = ((value - data) / split);
                 const led = [ 
                     parseInt(color[0] * partial), 
@@ -545,7 +726,7 @@ function rain_process(err, count, buff) {
                     led[2] > 255 ? 255 : led[2] < 0 ? 0 : led[2],
                 ]
 
-                KEY_LIGHTING[row[counter]] = final;
+                app.lightning[row[counter]] = final;
             }
         }
     } else {
@@ -574,17 +755,47 @@ function rain_process(err, count, buff) {
         }
     );
 
+    mqtt.publish("effect", "music");
+
     lastData = new Date();
 }
 
-app.get("/turn-on", (req, res) => {
+let state = true;
+
+express.get("/lights/all", (req, res) => {
+    log("Sending State", state);
+
+    res.send({ state });
+});
+
+express.post("/lights/all", (req, res) => {
+    if (req.body.state === "true") {
+        disableEffect();
+        enableFire();
+    
+        state = true;
+
+        res.sendStatus(200);
+    } else {
+        disableEffect();
+        
+        effectFlag = true;
+        state = false;
+    
+        setColorAll(0, 0, 0);
+    
+        res.sendStatus(200);
+    }
+});
+
+express.get("/turn-on", (req, res) => {
     disableEffect();
-    enableRainbow();
+    enableFire();
 
     res.sendStatus(200);
 });
 
-app.get("/turn-off", (req, res) => {
+express.get("/turn-off", (req, res) => {
     disableEffect();
     
     effectFlag = true;
@@ -594,7 +805,7 @@ app.get("/turn-off", (req, res) => {
     res.sendStatus(200);
 });
 
-app.get("/color-red", (req, res) => {
+express.get("/color-red", (req, res) => {
     disableEffect();
     
     effectFlag = true;
@@ -604,7 +815,7 @@ app.get("/color-red", (req, res) => {
     res.sendStatus(200);
 });
 
-app.get("/color-green", (req, res) => {
+express.get("/color-green", (req, res) => {
     disableEffect();
     
     effectFlag = true;
@@ -614,7 +825,7 @@ app.get("/color-green", (req, res) => {
     res.sendStatus(200);
 });
 
-app.get("/color-blue", (req, res) => {
+express.get("/color-blue", (req, res) => {
     disableEffect();
     
     effectFlag = true;
@@ -624,7 +835,7 @@ app.get("/color-blue", (req, res) => {
     res.sendStatus(200);
 });
 
-app.get("/color-white", (req, res) => {
+express.get("/color-white", (req, res) => {
     disableEffect();
     
     effectFlag = true;
@@ -634,41 +845,45 @@ app.get("/color-white", (req, res) => {
     res.sendStatus(200);
 });
 
-app.listen(4524);
+express.listen(4524);
 
 function MapRazerKeys(data) { 
-    for (let i in KEY_LIGHTING) {
-        KEY_LIGHTING[i] = [0, 0, 0];
+    for (let i in app.lightning) {
+        app.lightning[i] = [0, 0, 0];
     }
     
     for (let i = 2; i < data.length; i++) {
         const val = data[i].split(',');
 
         if (val.length === 5) {
-            if (!RazerMap[val[0]]) continue;
+            if (!RazerMap.Map[val[0]]) continue;
 
-            const key = RazerMap[val[0]][val[1]];
+            const key = RazerMap.Map[val[0]][val[1]];
 
-            KEY_LIGHTING[key] = [val[2], val[3], val[4]];
+            app.lightning[key] = [
+                parseInt(val[2]), 
+                parseInt(val[3]), 
+                parseInt(val[4])
+            ];
         }
     }
 
-    KEY_LIGHTING[KEY.BAR_2] = KEY_LIGHTING[KEY.ESCAPE]; 
-    KEY_LIGHTING[KEY.BAR_3] = KEY_LIGHTING[KEY.F1]; 
-    KEY_LIGHTING[KEY.BAR_4] = KEY_LIGHTING[KEY.F2]; 
-    KEY_LIGHTING[KEY.BAR_5] = KEY_LIGHTING[KEY.F3]; 
-    KEY_LIGHTING[KEY.BAR_6] = KEY_LIGHTING[KEY.F4]; 
-    KEY_LIGHTING[KEY.BAR_7] = KEY_LIGHTING[KEY.F5]; 
-    KEY_LIGHTING[KEY.BAR_8] = KEY_LIGHTING[KEY.F6]; 
-    KEY_LIGHTING[KEY.BAR_9] = KEY_LIGHTING[KEY.F7]; 
-    KEY_LIGHTING[KEY.BAR_10] = KEY_LIGHTING[KEY.F8]; 
-    KEY_LIGHTING[KEY.BAR_11] = KEY_LIGHTING[KEY.F9]; 
-    KEY_LIGHTING[KEY.BAR_12] = KEY_LIGHTING[KEY.F10];
-    KEY_LIGHTING[KEY.BAR_13] = KEY_LIGHTING[KEY.F11];
-    KEY_LIGHTING[KEY.BAR_14] = KEY_LIGHTING[KEY.F12]; 
-    KEY_LIGHTING[KEY.BAR_15] = KEY_LIGHTING[KEY.PRINT_SCREEN]; 
-    KEY_LIGHTING[KEY.BAR_16] = KEY_LIGHTING[KEY.SCROLL_LOCK]; 
-    KEY_LIGHTING[KEY.BAR_17] = KEY_LIGHTING[KEY.PAUSE_BREAK]; 
+    app.lightning[KEY.BAR_2] = app.lightning[KEY.ESCAPE]; 
+    app.lightning[KEY.BAR_3] = app.lightning[KEY.F1]; 
+    app.lightning[KEY.BAR_4] = app.lightning[KEY.F2]; 
+    app.lightning[KEY.BAR_5] = app.lightning[KEY.F3]; 
+    app.lightning[KEY.BAR_6] = app.lightning[KEY.F4]; 
+    app.lightning[KEY.BAR_7] = app.lightning[KEY.F5]; 
+    app.lightning[KEY.BAR_8] = app.lightning[KEY.F6]; 
+    app.lightning[KEY.BAR_9] = app.lightning[KEY.F7]; 
+    app.lightning[KEY.BAR_10] = app.lightning[KEY.F8]; 
+    app.lightning[KEY.BAR_11] = app.lightning[KEY.F9]; 
+    app.lightning[KEY.BAR_12] = app.lightning[KEY.F10];
+    app.lightning[KEY.BAR_13] = app.lightning[KEY.F11];
+    app.lightning[KEY.BAR_14] = app.lightning[KEY.F12]; 
+    app.lightning[KEY.BAR_15] = app.lightning[KEY.PRINT_SCREEN]; 
+    app.lightning[KEY.BAR_16] = app.lightning[KEY.SCROLL_LOCK]; 
+    app.lightning[KEY.BAR_17] = app.lightning[KEY.PAUSE_BREAK]; 
 }
 
 function toHex(value) {
@@ -681,103 +896,149 @@ function toHex(value) {
     return hex.toUpperCase();
 }
 
+function toRGB(hex) {
+    var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+        r: parseInt(result[1], 16),
+        g: parseInt(result[2], 16),
+        b: parseInt(result[3], 16)
+    } : null;
+}
+
+function changeEffect(value) {    
+    if (rain_flag) {
+        rain_flag = false;
+    }
+
+    if (value === 'sync_screen') {
+        disableEffect();
+        enableScreenSync();
+    } else if (value === 'sync_music') {    
+        disableEffect();
+
+        rain_flag = true;
+        
+        fs.open(rain_path, 'r', (err, fd) => { rain_file = fd; rain_read(); });
+    } else if (value === 'effect_rainbow') {
+        disableEffect();
+        enableRainbow();
+    } else if (value === 'effect_wave') {
+        disableEffect();
+        enableWave();
+    } else if (value === 'effect_walk') {
+        disableEffect();
+        enableWalk();
+    } else if (value === 'effect_fire') {
+        disableEffect();
+        enableFire();
+    } else if (value === 'effect_water') {
+        disableEffect();
+        enableWater();
+    } else if (value === 'effect_random') {
+        disableEffect();
+        enableRandom();
+    } else if (value === "static_off") {
+        disableEffect();
+        
+        effectFlag = true;
+
+        setColorAll(0, 0, 0);     
+    }  else if (value === "static_red") {
+        disableEffect();
+        
+        effectFlag = true;
+
+        setColorAll(255, 0, 0);     
+    } else if (value === "static_green") {
+        disableEffect();
+        
+        effectFlag = true;
+
+        setColorAll(0, 255, 0);         
+    } else if (value === "static_blue") {
+        disableEffect();
+        
+        effectFlag = true;
+
+        setColorAll(0, 0, 255);    
+    } else if (value === "static_white") {
+        disableEffect(); 
+        
+        effectFlag = true;
+
+        setColorAll(255, 255, 255);    
+    }
+}
+
+mqtt.on('connect', () => {
+    log("MQTT connected");    
+
+    mqtt.subscribe("state/set");
+    mqtt.subscribe("rgb/set");
+    mqtt.subscribe("effect/set");
+});
+   
+mqtt.on('message', (topic, message) => {
+    log("MQTT", topic, message.toString());
+
+    const msg = message.toString();
+
+    if (topic === "state/set") {
+        if (msg === "on") {
+            lightFlag = true;
+
+            setColorAll(lastR, lastG, lastB);
+
+            mqtt.publish("state", "on");
+        } else {        
+            lightFlag = false;
+
+            setColorAll(0, 0, 0);
+            
+            mqtt.publish("state", "off");
+        }
+    } else if (topic === "rgb/set") {
+        const parts = msg.split(",");
+
+        disableEffect();
+        
+        effectFlag = true;
+
+        mqtt.publish("effect", "static");
+
+        setColorAll(parseInt(parts[0]), parseInt(parts[1]), parseInt(parts[2]));        
+    }
+});
+
 process.on('exit', exitHandler.bind(null,{cleanup:true}));
 process.on('SIGINT', exitHandler.bind(null, {exit:true}));
 process.on('SIGUSR1', exitHandler.bind(null, {exit:true}));
 process.on('SIGUSR2', exitHandler.bind(null, {exit:true}));
 process.on('uncaughtException', exitHandler.bind(null, {exit:true}));
 
-const RazerMap = [  
-    [
-    KEY.INVALID,        KEY.ESCAPE,         KEY.INVALID,        KEY.F1,             KEY.F2,             KEY.F3,             KEY.F4,             KEY.F5,             KEY.F6,         KEY.F7, 
-    KEY.F8,             KEY.F9,             KEY.F10,            KEY.F11,            KEY.F12,            KEY.PRINT_SCREEN,   KEY.SCROLL_LOCK,    KEY.PAUSE_BREAK,    KEY.INVALID,    KEY.INVALID, 
-    KEY.INVALID ],                  
-      
-    [
-    KEY.G2,             KEY.TILDE,          KEY.ONE,            KEY.TWO,            KEY.THREE,          KEY.FOUR,           KEY.FIVE,           KEY.SIX,            KEY.SEVEN,      KEY.EIGHT, 
-    KEY.NINE,           KEY.ZERO,           KEY.MINUS,          KEY.EQUALS,         KEY.BACKSPACE,      KEY.INSERT,         KEY.HOME,           KEY.PAGE_UP,        KEY.NUM_LOCK,   KEY.NUM_SLASH,
-    KEY.NUM_ASTERISK,   KEY.NUM_MINUS ],                
-      
-    [  
-    KEY.G3,             KEY.TAB,            KEY.Q,              KEY.W,              KEY.E,              KEY.R,              KEY.T,              KEY.Y,              KEY.U,          KEY.I, 
-    KEY.O,              KEY.P,              KEY.OPEN_BRACKET,   KEY.CLOSE_BRACKET,  KEY.BACKSLASH,      KEY.DELETE,         KEY.HOME,           KEY.PAGE_DOWN,      KEY.NUM_7,      KEY.NUM_8, 
-    KEY.NUM_9,          KEY.NUM_PLUS ],     
-      
-    [  
-    KEY.G4,             KEY.CAPS_LOCK,      KEY.A,              KEY.S,              KEY.D,              KEY.F,              KEY.G,              KEY.H,              KEY.J,          KEY.K, 
-    KEY.L,              KEY.SEMICOLON,      KEY.APOSTROPHE,     KEY.INVALID,        KEY.ENTER,          KEY.INVALID,        KEY.INVALID,         KEY.INVALID,        KEY.NUM_4,      KEY.NUM_5, 
-    KEY.NUM_6 ],        
-      
-    [  
-    KEY.G5,             KEY.LEFT_SHIFT,     KEY.INVALID,        KEY.Z,              KEY.X,              KEY.C,              KEY.V,              KEY.B,              KEY.N,          KEY.M,          
-    KEY.COMMA,          KEY.PERIOD,         KEY.FORWARD_SLASH,  KEY.INVALID,        KEY.RIGHT_SHIFT,    KEY.INVALID,        KEY.ARROW_UP,       KEY.INVALID,        KEY.NUM_1,      KEY.NUM_2,      
-    KEY.NUM_3,          KEY.NUM_ENTER ],    
-      
-    [  
-    KEY.G6,             KEY.LEFT_CTRL,      KEY.LEFT_WIN,       KEY.LEFT_ALT,       KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.SPACE,          KEY.INVALID,    KEY.INVALID, 
-    KEY.INVALID,        KEY.RIGHT_ALT,      KEY.RIGHT_WIN,      KEY.APP_SELECT,     KEY.RIGHT_CTRL,     KEY.ARROW_LEFT,     KEY.ARROW_DOWN,     KEY.ARROW_RIGHT,    KEY.INVALID,    KEY.NUM_0,      
-    KEY.NUM_DOT ]
-]     
-
-const CorsairMap = [    
-    KEY.INVALID,        KEY.ESCAPE,         KEY.F1,             KEY.F2,             KEY.F3,             KEY.F4,             KEY.F5,             KEY.F6,             KEY.F7,         KEY.F8, 
-    KEY.F9,             KEY.F10,            KEY.F11,            KEY.TILDE,          KEY.ONE,            KEY.TWO,            KEY.THREE,          KEY.FOUR,           KEY.FIVE,       KEY.SIX, 
-    KEY.SEVEN,          KEY.EIGHT,          KEY.NINE,           KEY.ZERO,           KEY.MINUS,          KEY.TAB,            KEY.Q,              KEY.W,              KEY.E,          KEY.R, 
-    KEY.T,              KEY.Y,              KEY.U,              KEY.I,              KEY.O,              KEY.P,              KEY.OPEN_BRACKET,   KEY.CAPS_LOCK,      KEY.A,          KEY.S, 
-    KEY.D,              KEY.F,              KEY.G,              KEY.H,              KEY.J,              KEY.K,              KEY.L,              KEY.SEMICOLON,      KEY.APOSTROPHE, KEY.LEFT_SHIFT,
-    KEY.INVALID,        KEY.Z,              KEY.X,              KEY.C,              KEY.V,              KEY.B,              KEY.N,              KEY.M,              KEY.COMMA,      KEY.PERIOD,
-    KEY.FORWARD_SLASH,  KEY.LEFT_CTRL,      KEY.LEFT_WIN,       KEY.LEFT_ALT,       KEY.INVALID,        KEY.SPACE,          KEY.INVALID,        KEY.INVALID,        KEY.RIGHT_ALT,  KEY.RIGHT_WIN,
-    KEY.APP_SELECT,     KEY.LED_PROFILE,    KEY.LED_BRIGHTNESS, KEY.F12,            KEY.PRINT_SCREEN,   KEY.SCROLL_LOCK,    KEY.PAUSE_BREAK,    KEY.INSERT,         KEY.HOME,       KEY.PAGE_UP,
-    KEY.CLOSE_BRACKET,  KEY.BACKSLASH,      KEY.INVALID,        KEY.ENTER,          KEY.INVALID,        KEY.EQUALS,         KEY.INVALID,        KEY.BACKSPACE,      KEY.DELETE,     KEY.END,
-    KEY.PAGE_DOWN,      KEY.RIGHT_SHIFT,    KEY.RIGHT_CTRL,     KEY.ARROW_UP,       KEY.ARROW_LEFT,     KEY.ARROW_DOWN,     KEY.ARROW_RIGHT,    KEY.WIN_LOCK,       KEY.MUTE,       KEY.STOP,
-    KEY.PREV,           KEY.PLAY,           KEY.NEXT,           KEY.NUM_LOCK,       KEY.NUM_SLASH,      KEY.NUM_ASTERISK,   KEY.NUM_MINUS,      KEY.NUM_PLUS,       KEY.NUM_ENTER,  KEY.NUM_7,
-    KEY.NUM_8,          KEY.NUM_9,          KEY.INVALID,        KEY.NUM_4,          KEY.NUM_5,          KEY.NUM_6,          KEY.NUM_1,          KEY.NUM_2,          KEY.NUM_3,      KEY.NUM_0,
-    KEY.NUM_DOT,        KEY.INVALID,        KEY.INVALID,        KEY.G1,             KEY.INVALID,        KEY.INVALID,        KEY.G2,             KEY.INVALID,        KEY.INVALID,    KEY.G3,
-    KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.G4,         KEY.INVALID,
-    KEY.INVALID,        KEY.G5,             KEY.INVALID,        KEY.INVALID,        KEY.G6,             KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,    KEY.INVALID,
-    KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,    KEY.INVALID,
-    KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,        KEY.INVALID,    KEY.INVALID,
-    KEY.BAR_1,          KEY.BAR_2,          KEY.BAR_3,          KEY.BAR_4,          KEY.BAR_5,          KEY.BAR_6,          KEY.BAR_7,          KEY.BAR_8,          KEY.BAR_9 ,     KEY.BAR_10,
-    KEY.BAR_11,         KEY.BAR_12,         KEY.BAR_13,         KEY.BAR_14,         KEY.BAR_15,         KEY.BAR_16,         KEY.BAR_17,         KEY.BAR_18,         KEY.BAR_19,     KEY.INVALID
-]
-
-const CorsairVisualizerRows = [
-    [ KEY.G6, KEY.G5, KEY.G4, KEY.G3, KEY.G2, KEY.G1, KEY.BAR_1],
-    [ KEY.LEFT_CTRL, KEY.LEFT_SHIFT, KEY.CAPS_LOCK, KEY.TAB, KEY.TILDE, KEY.ESCAPE, KEY.BAR_2, KEY.INVALID, KEY.INVALID ],
-    [ KEY.LEFT_WIN, KEY.Z, KEY.A, KEY.Q, KEY.ONE, KEY.F1, KEY.LED_PROFILE, KEY.BAR_3, KEY.INVALID, KEY.INVALID, KEY.INVALID  ],
-    [ KEY.LEFT_ALT, KEY.X, KEY.S, KEY.W, KEY.TWO, KEY.F2, KEY.LED_BRIGHTNESS, KEY.BAR_4, KEY.INVALID ],
-    [ KEY.INVALID, KEY.C, KEY.D, KEY.E, KEY.THREE, KEY.F3, KEY.WIN_LOCK, KEY.BAR_5 ],
-    [ KEY.INVALID, KEY.V, KEY.F, KEY.R, KEY.FOUR, KEY.F4, KEY.BAR_6 ],
-    [ KEY.SPACE, KEY.B, KEY.G, KEY.T, KEY.FIVE, ],
-    [ KEY.N, KEY.H, KEY.Y, KEY.SIX, KEY.F5 ],
-    [ KEY.M, KEY.J, KEY.U, KEY.SEVEN, KEY.F6, KEY.BAR_7 ],
-    [ KEY.COMMA, KEY.K, KEY.I, KEY.EIGHT, KEY.F7, KEY.BAR_8 ],
-    [ KEY.PERIOD, KEY.L, KEY.O, KEY.NINE, KEY.F8, KEY.BAR_9 ],
-    [ KEY.RIGHT_ALT, KEY.PERIOD, KEY.L, KEY.O, KEY.NINE, KEY.F8, KEY.BAR_10 ],
-    [ KEY.RIGHT_WIN, KEY.FORWARD_SLASH, KEY.SEMICOLON, KEY.P, KEY.ZERO, KEY.BAR_11 ],
-    [ KEY.APP_SELECT, KEY.APOSTROPHE, KEY.OPEN_BRACKET, KEY.MINUS, KEY.F9, KEY.BAR_12 ],
-    [ KEY.INVALID, KEY.INVALID, KEY.CLOSE_BRACKET, KEY.EQUALS, KEY.F10, KEY.BAR_13 ],
-    [ KEY.RIGHT_CTRL, KEY.RIGHT_SHIFT, KEY.ENTER, KEY.BACKSLASH, KEY.BACKSPACE, KEY.F12, KEY.BAR_14 ],
-]
-
-const CorsairVisualizerRowColors = [    
-    [ 255,   0,   0], 
-    [ 225,  30,   0],
-    [ 195,  60,   0],
-    [ 165,  90,   0],
-    [ 135, 120,   0],
-    [ 105, 150,   0],
-    [  75, 180,   0],
-    [  45, 210,   0],
-    [   0, 255,   0],
-    [   0, 225,  30],
-    [   0, 195,  60],
-    [   0, 165,  90],
-    [   0, 135, 120],
-    [   0, 105, 150],
-    [   0,  75, 180],
-    [   0,  45, 210],
-    [   0,   0, 255],
-]
-
-const KEY_LIGHTING = [];
+const SCREEN_ZONES = {
+    TOP: {
+        SX: 0,
+        SY: 0,
+        EX: 2560,
+        EY: 256
+    },
+    BOTTOM: {
+        SX: 0,
+        SY: 768,
+        EX: 2560,
+        EY: 1080
+    },
+    RIGHT: {
+        SX: 2000,
+        SY: 0,
+        EX: 2560,
+        EY: 1080
+    },
+    CENTER: {
+        SX: 1024,
+        SY: 412,
+        EX: 1536,
+        EY: 668
+    }
+}

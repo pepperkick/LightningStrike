@@ -1,11 +1,8 @@
-let count = 0;
 let r = 255, g = 0, b = 0;
 let rf = false, gf = true, bf = false;
 let step = 1;
 
 export default () => {
-    const values = [];
-
     if (rf) {
         r += step;
         b -= step;
@@ -37,8 +34,6 @@ export default () => {
     }
 
     return {
-        r,
-        g,
-        b
+        r, g, b
     };
 }

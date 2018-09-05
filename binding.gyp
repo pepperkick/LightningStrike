@@ -2,11 +2,11 @@
   "targets": [
     {
       "target_name": "aura",
-      "sources": [ "./src/modules/aura/main.cpp" ]
+      "sources": [ "./src/devices/aura/main.cpp" ]
     },
     {
       "target_name": "logitech",
-      "sources": [ "./src/modules/logitech/main.cpp" ]
+      "sources": [ "./src/devices/logitech/main.cpp" ]
     }
     # {
     #   "target_name": "audio",
