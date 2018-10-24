@@ -1,0 +1,17 @@
+{
+    "effects": {
+        "default": "rainbow",
+        "window": {
+            "enabled": false
+        }
+    },
+    "services": {
+        "gpmdp": {
+            "enabled": true,
+            "ip": "localhost:5672"
+        },
+        "mqtt": {
+            "ip": "192.168.0.200:1983"
+        }
+    }
+}

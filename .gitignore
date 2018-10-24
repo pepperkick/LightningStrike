@@ -1,4 +1,5 @@
 .vscode/
+.node-persist/
 
 build/
 node_modules/

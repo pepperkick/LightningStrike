@@ -220,4 +220,7 @@ export default {
     NZXT_2_18:      2668,
     NZXT_2_19:      2669,
     NZXT_2_20:      2670,
+
+    // Custom Block 7 (2700)
+    HUE_1:          2701
 }

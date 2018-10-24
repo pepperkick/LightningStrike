@@ -2,11 +2,10 @@ import five from 'johnny-five';
 import debug from 'debug';
 import sleep from 'async-sleep';
 import clear from 'clear';
-import inquirer from 'inquirer';
 import fs from 'fs';
 import net from 'net';
 import request from 'request';
-import Color from 'color';
+import Color from 'color-convert';
 import pythonBridge from 'python-bridge';
 import Express from "express";
 import IOT from "aws-iot-device-sdk";
@@ -15,6 +14,8 @@ import MQTT from 'mqtt';
 import robot from 'robotjs';
 import * as Vibrant from 'node-vibrant'
 import EventEmitter from 'events';
+import Hue from 'philips-hue';
+import servgen from '@abskmj/servgen';
 
 import aura from '../build/Release/aura';
 import logitech from '../build/Release/logitech';
@@ -29,11 +30,12 @@ import Walk from './effects/walk';
 import Fire from './effects/fire';
 import Water from './effects/water';
 import Random from './effects/random';
-
-import GPMDP from "./modules/gpmdp";
-import PipeRazer from "./modules/pipe-razer"
+import Gradient from "./effects/gradient";
+import Win from "./effects/window";
 
 import KEY from './objects/keys';
+
+const activeWin = require("active-win");
 
 const LOGITECH_PIPE_PATH = "\\\\.\\pipe\\lightningstrike_logitech";
 const log = debug('app');
@@ -42,17 +44,19 @@ const rain_size = 8192;
 const cue = new CueSDK(`${__dirname}/../files/CUESDK_2015.dll`);
 const python = pythonBridge();
 const express = new Express();
+const hue = new Hue()
 
-const mqtt = MQTT.connect("mqtt://localhost");
+const mqtt = MQTT.connect("mqtt://192.168.0.200:1983");
 const app = new EventEmitter();
 
 app.express = express;
 app.effect = changeEffect;
+app.color = setColorAll;
+app.disableEffect = disableEffect;
+app.enableEffect = enableEffect;
+app.setEffectFlag = (val) => effectFlag = val;
 app.lightning = [];
 app.keys = KEY;
-
-const gpmdp = GPMDP(app);
-const pipeRazer = PipeRazer(app);
 
 let effectInterval;
 let effectFlag = false;
@@ -66,6 +70,24 @@ let rain_file;
 let rain_lastR, rain_lastG, rain_lastB;
 let rain_flag = false;
 let lightFlag = true;
+let current_hour = new Date().getHours();
+
+let hueReady = false;
+
+setInterval(() => {
+    current_hour = new Date().getHours();
+}, 60 * 60 * 1000);
+
+setInterval(async () => {
+    const info = await activeWin();
+    
+    // log(info)
+
+    if (info.owner.name === "ApplicationFrameHost.exe")
+        Win(app,info.title)
+    else
+        Win(app, info.owner.name);
+}, 1 * 1000);
 
 aura.Init();
 logitech.Init();
@@ -114,73 +136,24 @@ if (!process.env.NO_ARDUINO) {
     init();
 }
 
-const query = () => {
-    inquirer.prompt([
-        {
-            type: "list",
-            name: "Options",
-            message: "Select an Option",
-            choices: [
-                {
-                    name: "Sync with Screen",
-                    value: 'sync_screen'
-                },
-                {
-                    name: "Sync with Audio",
-                    value: 'sync_music'
-                },
-                {
-                    name: "Rainbow Effect",
-                    value: "effect_rainbow"
-                },
-                {
-                    name: "Wave Effect",
-                    value: "effect_wave"
-                },
-                {
-                    name: "Walk Effect",
-                    value: "effect_walk"
-                },
-                {
-                    name: "Fire Effect",
-                    value: "effect_fire"
-                },
-                {
-                    name: "Water Effect",
-                    value: "effect_water"
-                },
-                {
-                    name: "Random Fill Effect",
-                    value: "effect_random"
-                },
-                {
-                    name: "Static: Off",
-                    value: "static_off"
-                },
-                {
-                    name: "Static: Red",
-                    value: "static_red"
-                },
-                {
-                    name: "Static: Green",
-                    value: "static_green"
-                },
-                {
-                    name: "Static: Blue",
-                    value: "static_blue"
-                },
-                {
-                    name: "Static: White",
-                    value: "static_white"
-                }
-            ]
-        }
-    ])
-    .then(answers => {
-        changeEffect(answers.Options);
+if (!process.env.NO_HUE) {
+    if (!process.env.HUE_USER) {
+        hue.getBridges()
+            .then((bridges) => {    
+                log(`HUE IP: ${bridges[0]}`);
+                return hue.auth(bridges[0]);
+            }).then(async (username) => {    
+                log(`HUE Username: ${username}`);
 
-        query();
-    });
+                log(await hue.getLights());
+            });
+    } else {
+        hue.bridge = process.env.HUE_IP;
+        hue.username = process.env.HUE_USER;
+        hue.lightId = 3;
+
+        hueReady = true;
+    }
 }
 
 setInterval(() => {
@@ -191,20 +164,30 @@ setInterval(() => {
             }
     
             disableEffect();
-            enableFire(app);
+            enableEffect();
         }
     }
 }, 30000);
 
-function init() {
-    enableFire(app);
-    startPipes();    
-
+async function init() {
     python.ex`import serial`;
     python.ex`import hue_plus.hue`;
     python.ex`ser = serial.Serial("COM4", 256000)`;
 
+    try {
+        await servgen.init(app, `${__dirname}/modules`, [ 'config', 'prefs', 'cli' ]);
+
+        // enableRainbow(app);
+        startPipes();    
+    } catch (error) {
+        log(error);
+    }
+
     log('Started!');
+}
+
+function enableEffect() {
+    enableRainbow(app);
 }
 
 function startPipes() {
@@ -213,7 +196,9 @@ function startPipes() {
             disableEffect();
 
             log(`Razer pipe disabled idle effect!`);
+            app.mqtt.publish("config/scene/active", "pipe");
         }
+        log("Razer", values);
 
         MapRazerKeys(values);
 
@@ -221,46 +206,80 @@ function startPipes() {
             0, 0, 0,
             {
                 per_key: true,
-                default_key: KEY.Q
+                default_key: KEY.Q,
+                hue_bright: true
             }
         );
 
         lastData = new Date();
     });
 
-    const logitech = net.createServer((stream) => {
-        stream.on('data', async (c) => {
-            if (dominatingPipe && dominatingPipe !== 'logitech') return;
-            else if (!dominatingPipe) dominatingPipe = 'logitech';
+    app.on("pipe-logitech", (values) => {
+        if (effectFlag) {
+            disableEffect();
 
-            const values = c.toString().split(' ');
+            log(`Logitech pipe disabled idle effect!`);
+            app.mqtt.publish("config/scene/active", "pipe");
+        }
+
+        if (parseInt(values[0]) === 1 && parseInt(values[1]) === 0xFFF9) {
+            setColorAll(
+                map(parseInt(values[2]), 0, 100, 0, 255),
+                map(parseInt(values[3]), 0, 100, 0, 255),
+                map(parseInt(values[4]), 0, 100, 0, 255)
+            );                
+        }
+
+        lastData = new Date();
+    });
+
+    // const logitech = net.createServer((stream) => {
+    //     stream.on('data', async (c) => {
+    //         if (dominatingPipe && dominatingPipe !== 'logitech') return;
+    //         else if (!dominatingPipe) dominatingPipe = 'logitech';
+
+    //         const values = c.toString().split(' ');
             
-            if (effectFlag) {
-                disableEffect();
+    //         if (effectFlag) {
+    //             disableEffect();
 
-                log(`Logitech pipe disabled idle effect!`);
-            }
+    //             log(`Logitech pipe disabled idle effect!`);
+    //         }
 
-            if (parseInt(values[0]) === 1 && parseInt(values[1]) === 0xFFF9) {
-                // setColorAll(
-                //     map(parseInt(values[2]), 0, 100, 0, 255),
-                //     map(parseInt(values[3]), 0, 100, 0, 255),
-                //     map(parseInt(values[4]), 0, 100, 0, 255)
-                // );                
-            }
+    //         if (parseInt(values[0]) === 1 && parseInt(values[1]) === 0xFFF9) {
+    //             // setColorAll(
+    //             //     map(parseInt(values[2]), 0, 100, 0, 255),
+    //             //     map(parseInt(values[3]), 0, 100, 0, 255),
+    //             //     map(parseInt(values[4]), 0, 100, 0, 255)
+    //             // );                
+    //         }
 
-            // log(c.toString());
+    //         // log(c.toString());
 
-            lastData = new Date();
-        });
-    });
+    //         lastData = new Date();
+    //     });
+    // });
     
-    logitech.listen(LOGITECH_PIPE_PATH, () => {
-        log('Logitech pipe Started!');
-    });
+    // logitech.listen(LOGITECH_PIPE_PATH, () => {
+    //     log('Logitech pipe Started!');
+    // });
  }
 
+let hue_throttle = 0;
+
+setInterval(() => {
+    if (hue_throttle > 0) hue_throttle--;
+}, 100)
+
+
 function setColorAll(r, g, b, o = {}) {
+    if (o.tween && !o.tween_set) {
+        o.target = [ r, g, b ];
+        o.tween_set = true;
+
+        setColorAll(lastR, lastG, lastB, o);
+    }
+
     if (!lightFlag) {
         const l = [];
 
@@ -305,6 +324,8 @@ function setColorAll(r, g, b, o = {}) {
         }
 
         cue.set(l, true);
+
+        app.mqtt.publish("device/corsair/rgb/set", JSON.stringify({ r, g, b }));
     }
 
     if (!o.no_aura) {
@@ -329,6 +350,8 @@ function setColorAll(r, g, b, o = {}) {
                 aura.SetMbColor(0, r, b, g);
             }
         }
+
+        app.mqtt.publish("device/desk/rgb/set", JSON.stringify({ r, g, b }));
     }
 
     if (!o.no_nzxt) {
@@ -336,8 +359,8 @@ function setColorAll(r, g, b, o = {}) {
             let c1 = "000000";
             let c2 = "000000";
 
-            c1 = `${toHex(parseInt(r))}0000`;
-            c2 = `${toHex(parseInt(r))}${toHex(parseInt(g))}${toHex(parseInt(b))}`;
+            c2 = `${toHex(parseInt(r))}0000`;
+            c1 = `${toHex(parseInt(r))}${toHex(parseInt(g))}${toHex(parseInt(b))}`;
 
             python.ex`hue_plus.hue.fixed(ser, 0, 1, ${c1})`
             python.ex`hue_plus.hue.fixed(ser, 0, 2, ${c2})`
@@ -366,9 +389,18 @@ function setColorAll(r, g, b, o = {}) {
                 c = `${toHex(parseInt(r))}${toHex(parseInt(g))}${toHex(parseInt(b))}`;
 
                 // python.ex`hue_plus.hue.custom(ser, 0, 1, [ ${c} ], "fixed", 0)`;
-                python.ex`hue_plus.hue.fixed(ser, 0, 0, ${c})`
+
+                if (!o.nzxt_channel)
+                    python.ex`hue_plus.hue.fixed(ser, 0, 0, ${c})`
+                else if (o.nzxt_channel === 1)
+                    python.ex`hue_plus.hue.fixed(ser, 0, 1, ${c})`
+                else if (o.nzxt_channel === 2)
+                    python.ex`hue_plus.hue.fixed(ser, 0, 2, ${c})`
             }
         }
+
+        app.mqtt.publish("device/nzxt/1/rgb/set", JSON.stringify({ r, g, b }));
+        app.mqtt.publish("device/nzxt/2/rgb/set", JSON.stringify({ r, g, b }));
     }
 
     if (!o.no_logitech) {
@@ -405,29 +437,82 @@ function setColorAll(r, g, b, o = {}) {
                 }
             }
         }
+        
+        app.mqtt.publish("device/logitech/rgb/set", JSON.stringify({ r, g, b }));
     }
 
     if (!process.env.NO_ARDUINO && !o.no_arduino) {
         arduinoRGB.color(r, g, b);
     }
 
+    if (!process.env.NO_HUE && !o.no_hue) {
+        let hsl;
+
+        if (o.per_key && app.lightning[KEY.HUE_1]) {
+            hsl = Color.rgb.hsl(app.lightning[KEY.HUE_1][0], app.lightning[KEY.HUE_1][1], app.lightning[KEY.HUE_1][2]);
+        } else {
+            hsl = Color.rgb.hsl(r, g, b);
+        }
+
+        const state = {
+            hue: parseInt(hsl[0] * 182),
+            sat: parseInt(hsl[1] * 2.54),
+            bri: o.hue_bright ? 255 : parseInt(map(hsl[2], 0, o.hue_bri_max ? o.hue_bri_max : 100, 0, 255))
+        }
+
+        if (hue_throttle < 5) {
+            hue_throttle++;
+
+            if (state.bri < 5) state.on = false;
+            else state.on = true;
+
+            if (state.bri > 255) state.bri = 255;
+    
+            hue.light(hue.lightId).setState(state)
+            .catch((error) => {
+                log(error);
+            });
+        }
+    }
+    
+    if (o.tween && o.tween_set) {
+        if (
+            r === o.target[0],
+            g === o.target[1],
+            b === o.target[2]
+        ) {
+            o.tween = false;
+            o.tween_set = false;
+            
+            return;
+        }
+
+        let nr = r, ng = g, nb = b;
+
+        if (nr !== o.target[0]) nr > o.target[0] ? nr-- : nr++;
+        if (ng !== o.target[1]) ng > o.target[1] ? ng-- : ng++;
+        if (nb !== o.target[2]) nb > o.target[2] ? nb-- : nb++;
+
+        setColorAll(nr, ng, nb, o);
+    }
+
     mqtt.publish("rgb", [ r, g, b ].join(","));
 }
 
 function enableRainbow() {
-    const speed = 150;
+    // const speed = 150;
 
-    effectFlag = true;
-    dominatingPipe = null;
+    // effectFlag = true;
+    // dominatingPipe = null;
 
-    effectInterval = setInterval(() => {
-        const colors = Rainbow();
+    // effectInterval = setInterval(() => {
+    //     const colors = Rainbow();
         
-        setColorAll(colors.r, colors.g, colors.b);
-    }, speed);
+    //     setColorAll(colors.r, colors.g, colors.b);
+    // }, speed);
 
-    mqtt.publish("effect", "rainbow");
-    log('Enabled Idle Effect');
+    // app.mqtt.publish("config/scene/active", "rainbow");
+    // log('Enabled Idle Effect');
 }
 
 function enableWave() {
@@ -442,7 +527,7 @@ function enableWave() {
         setColorAll(colors.r, colors.g, colors.b);
     }, speed);
 
-    mqtt.publish("effect", "wave");
+    app.mqtt.publish("config/scene/active", "wave");
     log('Enabled Idle Effect');
 }
 
@@ -506,7 +591,24 @@ function enableWater() {
         });
     }, speed);
     
-    mqtt.publish("effect", "fire");
+    mqtt.publish("effect", "water");
+}
+
+function enableGradient() {    
+    effectFlag = true;
+    dominatingPipe = null;
+
+    const data = Gradient(app);
+
+    for (let i in data.keys) {
+        app.lightning[i] = data.keys[i];
+    }
+    
+    setColorAll(0, 0, 0, {
+        per_key: true
+    });
+    
+    mqtt.publish("effect", "gradient");
 }
 
 function enableRandom() {
@@ -523,7 +625,8 @@ function enableRandom() {
         }
         
         setColorAll(0, 0, 0, {
-            per_key: true
+            per_key: true,
+            hue_bright: true
         });
     }, speed);
     
@@ -631,12 +734,21 @@ function enableScreenSync() {
     }, speed);
 }
 
+function enableAudioSync() {
+    rain_flag = true;
+    
+    fs.open(rain_path, 'r', (err, fd) => { rain_file = fd; rain_read(); });
+
+    app.mqtt.publish("config/scene/active", "music");
+}
+
 function disableEffect(o = {}) {
     clearInterval(effectInterval);
 
     effectFlag = false;
+    rain_flag = false;
 
-    cue.clear();
+    // cue.clear();
 
     log('Disabled Idle Effect');
 }
@@ -645,7 +757,7 @@ function map (num, in_min, in_max, out_min, out_max) {
     return (num - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-query();
+// query();
 
 function exitHandler(options, err) {
     aura.Shutdown();
@@ -751,7 +863,8 @@ function rain_process(err, count, buff) {
             corsair_per_key: perKey,
             bass_only: false,
             nzxt_bass_only: true,
-            logitech_bass_only: false
+            logitech_bass_only: false,
+            hue_bri_max: 32
         }
     );
 
@@ -759,93 +872,6 @@ function rain_process(err, count, buff) {
 
     lastData = new Date();
 }
-
-let state = true;
-
-express.get("/lights/all", (req, res) => {
-    log("Sending State", state);
-
-    res.send({ state });
-});
-
-express.post("/lights/all", (req, res) => {
-    if (req.body.state === "true") {
-        disableEffect();
-        enableFire();
-    
-        state = true;
-
-        res.sendStatus(200);
-    } else {
-        disableEffect();
-        
-        effectFlag = true;
-        state = false;
-    
-        setColorAll(0, 0, 0);
-    
-        res.sendStatus(200);
-    }
-});
-
-express.get("/turn-on", (req, res) => {
-    disableEffect();
-    enableFire();
-
-    res.sendStatus(200);
-});
-
-express.get("/turn-off", (req, res) => {
-    disableEffect();
-    
-    effectFlag = true;
-
-    setColorAll(0, 0, 0);
-
-    res.sendStatus(200);
-});
-
-express.get("/color-red", (req, res) => {
-    disableEffect();
-    
-    effectFlag = true;
-
-    setColorAll(255, 0, 0);
-
-    res.sendStatus(200);
-});
-
-express.get("/color-green", (req, res) => {
-    disableEffect();
-    
-    effectFlag = true;
-
-    setColorAll(0, 255, 0);
-
-    res.sendStatus(200);
-});
-
-express.get("/color-blue", (req, res) => {
-    disableEffect();
-    
-    effectFlag = true;
-
-    setColorAll(0, 0, 255);
-
-    res.sendStatus(200);
-});
-
-express.get("/color-white", (req, res) => {
-    disableEffect();
-    
-    effectFlag = true;
-
-    setColorAll(255, 255, 255);
-
-    res.sendStatus(200);
-});
-
-express.listen(4524);
 
 function MapRazerKeys(data) { 
     for (let i in app.lightning) {
@@ -884,6 +910,7 @@ function MapRazerKeys(data) {
     app.lightning[KEY.BAR_15] = app.lightning[KEY.PRINT_SCREEN]; 
     app.lightning[KEY.BAR_16] = app.lightning[KEY.SCROLL_LOCK]; 
     app.lightning[KEY.BAR_17] = app.lightning[KEY.PAUSE_BREAK]; 
+    app.lightning[KEY.HUE_1] = app.lightning[KEY.N]; 
 }
 
 function toHex(value) {
@@ -905,110 +932,182 @@ function toRGB(hex) {
     } : null;
 }
 
-function changeEffect(value) {    
+function changeEffect(value, params) {    
     if (rain_flag) {
         rain_flag = false;
     }
+    
+    disableEffect();
 
     if (value === 'sync_screen') {
-        disableEffect();
         enableScreenSync();
-    } else if (value === 'sync_music') {    
-        disableEffect();
-
-        rain_flag = true;
-        
-        fs.open(rain_path, 'r', (err, fd) => { rain_file = fd; rain_read(); });
+    } else if (value === 'sync_music') {   
+        enableAudioSync();
     } else if (value === 'effect_rainbow') {
-        disableEffect();
         enableRainbow();
+    } else if (value === 'effect_gradient') {
+        enableGradient();
     } else if (value === 'effect_wave') {
-        disableEffect();
         enableWave();
     } else if (value === 'effect_walk') {
-        disableEffect();
         enableWalk();
     } else if (value === 'effect_fire') {
-        disableEffect();
         enableFire();
     } else if (value === 'effect_water') {
-        disableEffect();
         enableWater();
     } else if (value === 'effect_random') {
-        disableEffect();
         enableRandom();
     } else if (value === "static_off") {
-        disableEffect();
-        
         effectFlag = true;
 
         setColorAll(0, 0, 0);     
     }  else if (value === "static_red") {
-        disableEffect();
-        
         effectFlag = true;
 
         setColorAll(255, 0, 0);     
     } else if (value === "static_green") {
-        disableEffect();
-        
         effectFlag = true;
 
         setColorAll(0, 255, 0);         
-    } else if (value === "static_blue") {
-        disableEffect();
-        
+    } else if (value === "static_blue") {    
         effectFlag = true;
 
         setColorAll(0, 0, 255);    
-    } else if (value === "static_white") {
-        disableEffect(); 
-        
+    } else if (value === "static_white") {        
         effectFlag = true;
 
         setColorAll(255, 255, 255);    
     }
 }
 
-mqtt.on('connect', () => {
-    log("MQTT connected");    
-
-    mqtt.subscribe("state/set");
-    mqtt.subscribe("rgb/set");
-    mqtt.subscribe("effect/set");
+app.on('mqtt-connect', () => {
+    app.mqtt.subscribeList([
+        "device/desk/rgb",
+        "device/logitech/rgb",
+        "device/corsair/rgb",
+        "device/nzxt/1/rgb",
+        "device/nzxt/2/rgb",
+        "device/ups/battery",
+        "device/ups/status",
+        "config/scene",
+        "config/scene/active"
+    ])
 });
-   
-mqtt.on('message', (topic, message) => {
-    log("MQTT", topic, message.toString());
 
-    const msg = message.toString();
+app.on('mqtt-config/scene/active', (data) => {
+    const scene = data.toString();
+})
 
-    if (topic === "state/set") {
-        if (msg === "on") {
-            lightFlag = true;
+app.on('mqtt-config/scene', (data) => {
+    const scene = data.toString();
 
-            setColorAll(lastR, lastG, lastB);
-
-            mqtt.publish("state", "on");
-        } else {        
-            lightFlag = false;
-
-            setColorAll(0, 0, 0);
-            
-            mqtt.publish("state", "off");
-        }
-    } else if (topic === "rgb/set") {
-        const parts = msg.split(",");
-
-        disableEffect();
-        
-        effectFlag = true;
-
-        mqtt.publish("effect", "static");
-
-        setColorAll(parseInt(parts[0]), parseInt(parts[1]), parseInt(parts[2]));        
+    if (scene === 'music') {
+        enableAudioSync(app);
     }
+})
+
+app.on('mqtt-device/desk/rgb', (data) => {
+    const colors = parseMqttColors(data)  
+
+    disableEffect();
+    effectFlag = true;
+
+    setColorAll(colors.r, colors.g, colors.b, {
+        no_arduino: true,
+        no_corsair: true,
+        no_hue: true,
+        no_logitech: true,
+        no_nzxt: true
+    })
 });
+
+app.on('mqtt-device/logitech/rgb', (data) => {
+    const colors = parseMqttColors(data)  
+
+    disableEffect();
+    effectFlag = true;
+    
+    setColorAll(colors.r, colors.g, colors.b, {
+        no_arduino: true,
+        no_corsair: true,
+        no_hue: true,
+        no_nzxt: true,
+        no_aura: true
+    })
+});
+
+app.on('mqtt-device/corsair/rgb', (data) => {
+    const colors = parseMqttColors(data)  
+
+    disableEffect();
+    effectFlag = true;
+    
+    setColorAll(colors.r, colors.g, colors.b, {
+        no_arduino: true,
+        no_hue: true,
+        no_logitech: true,
+        no_nzxt: true,
+        no_aura: true,
+    })
+})
+
+app.on('mqtt-device/nzxt/1/rgb', (data) => {
+    const colors = parseMqttColors(data)  
+
+    disableEffect();
+    effectFlag = true;
+    
+    setColorAll(colors.r, colors.g, colors.b, {
+        no_arduino: true,
+        no_corsair: true,
+        no_hue: true,
+        no_logitech: true,
+        no_aura: true,
+        nzxt_channel: 1
+    })
+});
+
+app.on('mqtt-device/nzxt/1/rgb', (data) => {
+    const colors = parseMqttColors(data)  
+
+    disableEffect();
+    effectFlag = true;
+    
+    setColorAll(colors.r, colors.g, colors.b, {
+        no_arduino: true,
+        no_corsair: true,
+        no_hue: true,
+        no_logitech: true,
+        no_aura: true,
+        nzxt_channel: 1
+    })
+});
+
+app.on('mqtt-device/nzxt/2/rgb', (data) => {
+    const colors = parseMqttColors(data)  
+
+    disableEffect();
+    effectFlag = true;
+    
+    setColorAll(colors.r, colors.g, colors.b, {
+        no_arduino: true,
+        no_corsair: true,
+        no_hue: true,
+        no_logitech: true,
+        no_aura: true,
+        nzxt_channel: 2
+    })
+});
+
+function parseMqttColors(message) {
+    const colors = JSON.parse(message.toString())
+
+    if (!colors.r) colors.r = 0;
+    if (!colors.g) colors.g = 0;
+    if (!colors.b) colors.b = 0;
+
+    return colors;
+}
 
 process.on('exit', exitHandler.bind(null,{cleanup:true}));
 process.on('SIGINT', exitHandler.bind(null, {exit:true}));
