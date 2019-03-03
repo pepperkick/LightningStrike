@@ -30,7 +30,7 @@ export default (app) => {
         log(data[0])
         log(data[1])
 
-        if (data[0] === 5 && data[1] === 13) {
+        if (data[0] === 109 && data[1] === 13) {
             effectsMenu();
         }
     });

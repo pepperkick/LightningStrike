@@ -147,15 +147,29 @@ namespace LogiLed
         G_BADGE                 = 0xFFFF2
 
     }KeyName;
+
+    typedef enum
+    {
+        Keyboard                = 0x0,
+        Mouse                   = 0x3,
+        Mousemat                = 0x4,
+        Headset                 = 0x8,
+        Speaker                 = 0xe
+    }DeviceType;
 }
 
 bool LogiLedInit();
+bool LogiLedInitWithName(const char name[]);
 
 bool LogiLedGetSdkVersion(int *majorNum, int *minorNum, int *buildNum);
 bool LogiLedGetConfigOptionNumber(const wchar_t *configPath, double *defaultValue);
 bool LogiLedGetConfigOptionBool(const wchar_t *configPath, bool *defaultValue);
 bool LogiLedGetConfigOptionColor(const wchar_t *configPath, int *defaultRed, int *defaultGreen, int *defaultBlue);
+bool LogiLedGetConfigOptionRect(const wchar_t *configPath, int *defaultX, int *defaultY, int *defaultWidth, int *defaultHeight);
+bool LogiLedGetConfigOptionString(const wchar_t *configPath, wchar_t *defaultValue, int bufferSize);
 bool LogiLedGetConfigOptionKeyInput(const wchar_t *configPath, wchar_t *defaultValue, int bufferSize);
+bool LogiLedGetConfigOptionSelect(const wchar_t *configPath, wchar_t *defaultValue, int *valueSize, const wchar_t *values, int bufferSize);
+bool LogiLedGetConfigOptionRange(const wchar_t *configPath, int *defaultValue, int min, int max);
 bool LogiLedSetConfigOptionLabel(const wchar_t *configPath, wchar_t *label);
 
 //Generic functions => Apply to any device type.
@@ -182,7 +196,7 @@ bool LogiLedFlashSingleKey(LogiLed::KeyName keyName, int redPercentage, int gree
 bool LogiLedPulseSingleKey(LogiLed::KeyName keyName, int startRedPercentage, int startGreenPercentage, int startBluePercentage, int finishRedPercentage, int finishGreenPercentage, int finishBluePercentage, int msDuration, bool isInfinite);
 bool LogiLedStopEffectsOnKey(LogiLed::KeyName keyName);
 
+//Zonal functions => only apply to devices with zones.
+bool LogiLedSetLightingForTargetZone(LogiLed::DeviceType deviceType, int zone, int redPercentage, int greenPercentage, int bluePercentage);
+
 void LogiLedShutdown();
-
-
-

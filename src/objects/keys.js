@@ -126,7 +126,7 @@ export default {
     NUM_0:          1415,
     NUM_DOT:        1416,
 
-    // Custom Block 1 (2100)
+    // Custom Block 1 (2100)    Corsair K95 Macro Keys
     G1:             2100,
     G2:             2101,
     G3:             2102,
@@ -134,19 +134,19 @@ export default {
     G5:             2104,
     G6:             2105,
     
-    // Custom Block 2 (2200)
+    // Custom Block 2 (2200)    Corsair K95 Top Keys
     LED_PROFILE:    2200,
     LED_BRIGHTNESS: 2201,
     WIN_LOCK:       2202,
 
-    // Custom Block 3 (2300)
+    // Custom Block 3 (2300)    Corsair Media Keys
     MUTE:           2300,
     STOP:           2301,
     PREV:           2302,
     NEXT:           2303,
     PLAY:           2304,
     
-    // Custom Block 4 (2400)
+    // Custom Block 4 (2400)    Corsair Top Bar
     BAR_1:          2400,
     BAR_2:          2401,
     BAR_3:          2402,
@@ -167,7 +167,7 @@ export default {
     BAR_18:         2417,
     BAR_19:         2418,
 
-    // Custom Block 5 (2500)
+    // Custom Block 5 (2500)    Aura Motherboard Light
     AURA:           2500,
     LOGITECH:       2501,
     
@@ -178,7 +178,7 @@ export default {
     AURA_6:         2554,
     AURA_6:         2565,
 
-    // Custom Block 6 (2600)
+    // Custom Block 6 (2600)    NZXT HUE+
     NZXT_1_1:       2601,
     NZXT_1_2:       2602,
     NZXT_1_3:       2603,
@@ -221,6 +221,78 @@ export default {
     NZXT_2_19:      2669,
     NZXT_2_20:      2670,
 
-    // Custom Block 7 (2700)
-    HUE_1:          2701
+    // Custom Block 7 (2700)    Phillips HUE
+    HUE_1:          2701,
+
+    // Custom Block 8 (2800)    RGB Addressable Strip
+    RGB_ADDS_1:     2801, 
+    RGB_ADDS_2:     2802, 
+    RGB_ADDS_3:     2803, 
+    RGB_ADDS_4:     2804, 
+    RGB_ADDS_5:     2805, 
+    RGB_ADDS_6:     2806, 
+    RGB_ADDS_7:     2807, 
+    RGB_ADDS_8:     2808, 
+    RGB_ADDS_9:     2809, 
+    RGB_ADDS_10:    2810, 
+    RGB_ADDS_11:    2811, 
+    RGB_ADDS_12:    2812, 
+    RGB_ADDS_13:    2813, 
+    RGB_ADDS_14:    2814, 
+    RGB_ADDS_15:    2815, 
+    RGB_ADDS_16:    2816, 
+    RGB_ADDS_17:    2817, 
+    RGB_ADDS_18:    2818, 
+    RGB_ADDS_19:    2819, 
+    RGB_ADDS_20:    2820, 
+    RGB_ADDS_21:    2821, 
+    RGB_ADDS_22:    2822, 
+    RGB_ADDS_23:    2823, 
+    RGB_ADDS_24:    2824, 
+    RGB_ADDS_25:    2825, 
+    RGB_ADDS_26:    2826, 
+    RGB_ADDS_27:    2827, 
+    RGB_ADDS_28:    2828, 
+    RGB_ADDS_29:    2829, 
+    RGB_ADDS_30:    2830, 
+    RGB_ADDS_31:    2831, 
+    RGB_ADDS_32:    2832, 
+    RGB_ADDS_33:    2833, 
+    RGB_ADDS_34:    2834, 
+    RGB_ADDS_35:    2835, 
+    RGB_ADDS_36:    2836, 
+    RGB_ADDS_37:    2837, 
+    RGB_ADDS_38:    2838, 
+    RGB_ADDS_39:    2839, 
+    RGB_ADDS_40:    2840, 
+    RGB_ADDS_41:    2841, 
+    RGB_ADDS_42:    2842, 
+    RGB_ADDS_43:    2843, 
+    RGB_ADDS_44:    2844, 
+    RGB_ADDS_45:    2845, 
+    RGB_ADDS_46:    2846, 
+    RGB_ADDS_47:    2847, 
+    RGB_ADDS_48:    2848, 
+    RGB_ADDS_49:    2849, 
+    RGB_ADDS_50:    2840, 
+    RGB_ADDS_51:    2851, 
+    RGB_ADDS_52:    2852, 
+    RGB_ADDS_53:    2853, 
+    RGB_ADDS_54:    2854, 
+    RGB_ADDS_55:    2855, 
+    RGB_ADDS_56:    2856, 
+    RGB_ADDS_57:    2857, 
+    RGB_ADDS_58:    2858, 
+    RGB_ADDS_59:    2859, 
+    RGB_ADDS_60:    2860, 
+    RGB_ADDS_61:    2861, 
+    RGB_ADDS_62:    2862, 
+    RGB_ADDS_63:    2863, 
+    RGB_ADDS_64:    2864, 
+    RGB_ADDS_65:    2865, 
+    RGB_ADDS_66:    2866, 
+    RGB_ADDS_67:    2867, 
+    RGB_ADDS_68:    2868, 
+    RGB_ADDS_69:    2869, 
+    RGB_ADDS_70:    2870, 
 }

@@ -115,8 +115,8 @@ napi_value _SetMbColorAll(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   int handle;
   uint32_t ledSize;
-  BYTE* ledColors = new BYTE[6 * 3];
-	ZeroMemory(ledColors, 6 * 3);
+  BYTE* ledColors = new BYTE[70 * 3];
+	ZeroMemory(ledColors, 70 * 3);
 
   napi_get_cb_info(env, info, &argc, args, NULL, NULL);
   napi_get_value_int32(env, args[0], &handle);
@@ -139,7 +139,7 @@ napi_value _SetMbColorAll(napi_env env, napi_callback_info info) {
   }
 
 	SetMbMode(mbControllers[0], 1);
-  int status = SetMbColor(mbControllers[0], ledColors, 6 * 3);
+  int status = SetMbColor(mbControllers[0], ledColors, 70 * 3);
 
   return 0;
 }

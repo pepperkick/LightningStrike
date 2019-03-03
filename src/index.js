@@ -1,18 +1,13 @@
-import five from 'johnny-five';
 import debug from 'debug';
-import sleep from 'async-sleep';
-import clear from 'clear';
+import five from 'johnny-five';
+import pixel from 'node-pixel';
 import fs from 'fs';
-import net from 'net';
-import request from 'request';
 import Color from 'color-convert';
 import pythonBridge from 'python-bridge';
 import Express from "express";
-import IOT from "aws-iot-device-sdk";
 import bodyParser from "body-parser";
 import MQTT from 'mqtt';
 import robot from 'robotjs';
-import * as Vibrant from 'node-vibrant'
 import EventEmitter from 'events';
 import Hue from 'philips-hue';
 import servgen from '@abskmj/servgen';
@@ -36,8 +31,11 @@ import Win from "./effects/window";
 import KEY from './objects/keys';
 
 const activeWin = require("active-win");
+const processExists = require('process-exists');
+const cmd = require('node-cmd');
+const pathExists = require('path-exists');
+const request = require('async-request');
 
-const LOGITECH_PIPE_PATH = "\\\\.\\pipe\\lightningstrike_logitech";
 const log = debug('app');
 const rain_path = 'C:\\Users\\abhis\\Documents\\Rainmeter\\Skins\\RGBToText\\@Resources\\band.txt';
 const rain_size = 8192;
@@ -57,10 +55,12 @@ app.enableEffect = enableEffect;
 app.setEffectFlag = (val) => effectFlag = val;
 app.lightning = [];
 app.keys = KEY;
+app.cue = cue;
 
 let effectInterval;
 let effectFlag = false;
-let arduinoRGB;
+let arduinoStrip = null;
+let arduinoStrip2 = null;
 let lastData = new Date();
 let dominatingPipe = null;
 let lastR, lastG, lastB;
@@ -107,33 +107,32 @@ setInterval(() => {
     if (maxB !== 0)
         maxB -= 1;
 }, 2500);
+        
+init();
 
 if (!process.env.NO_ARDUINO) {
     board = new five.Board({
         port: 'COM3',
         repl: false
     });  
-    
+
     board.on("ready", function() {  
         log("[ARDUINO] Ready!");  
-        
-        arduinoRGB = new five.Led.RGB({
-            pins: [ 9, 10, 11 ],
-            isAnode: true
+
+        arduinoStrip = new pixel.Strip({
+            board: this,
+            controller: "FIRMATA",
+            strips: [ { pin: 7, length: 60 }, { pin: 5, length: 60 } ]
         });
 
-        arduinoRGB.on();
-        
-        init();
+        arduinoStrip.on("ready", function() {
+            log("[ARDUINO] Strip Ready!");  
+        });
 
         this.on("exit", function() {
-            arduinoRGB.off();
-
             log("[ARDUINO] Switched off!");  
         });
     });  
-} else {
-    init();
 }
 
 if (!process.env.NO_HUE) {
@@ -156,18 +155,18 @@ if (!process.env.NO_HUE) {
     }
 }
 
-setInterval(() => {
-    if (new Date().getTime() - lastData.getTime() >= 30000) {
-        if (!effectFlag) {       
-            if (rain_flag) {
-                rain_flag = false;
-            }
+// setInterval(() => {
+//     if (new Date().getTime() - lastData.getTime() >= 30000) {
+//         if (!effectFlag) {       
+//             if (rain_flag) {
+//                 rain_flag = false;
+//             }
     
-            disableEffect();
-            enableEffect();
-        }
-    }
-}, 30000);
+//             disableEffect();
+//             enableEffect();
+//         }
+//     }
+// }, 30000);
 
 async function init() {
     python.ex`import serial`;
@@ -271,7 +270,7 @@ setInterval(() => {
     if (hue_throttle > 0) hue_throttle--;
 }, 100)
 
-
+let smooth = 0;
 function setColorAll(r, g, b, o = {}) {
     if (o.tween && !o.tween_set) {
         o.target = [ r, g, b ];
@@ -378,8 +377,8 @@ function setColorAll(r, g, b, o = {}) {
                     const c2 = [];
 
                     for (let i = 0; i < 20; i++) {
-                        c1[i] = `${toHex(parseInt(app.lightning[KEY[`NZXT_1_${i+1}`]][0]))}${toHex(parseInt(app.lightning[KEY[`NZXT_1_${i+1}`]][1]))}${toHex(parseInt(app.lightning[KEY[`NZXT_1_${i+1}`]][2]))}`;
-                        c2[i] = `${toHex(parseInt(app.lightning[KEY[`NZXT_2_${i+1}`]][0]))}${toHex(parseInt(app.lightning[KEY[`NZXT_2_${i+1}`]][1]))}${toHex(parseInt(app.lightning[KEY[`NZXT_2_${i+1}`]][2]))}`;
+                        c2[i] = `${toHex(parseInt(app.lightning[KEY[`NZXT_1_${i+1}`]][0]))}${toHex(parseInt(app.lightning[KEY[`NZXT_1_${i+1}`]][1]))}${toHex(parseInt(app.lightning[KEY[`NZXT_1_${i+1}`]][2]))}`;
+                        c1[i] = `${toHex(parseInt(app.lightning[KEY[`NZXT_2_${i+1}`]][0]))}${toHex(parseInt(app.lightning[KEY[`NZXT_2_${i+1}`]][1]))}${toHex(parseInt(app.lightning[KEY[`NZXT_2_${i+1}`]][2]))}`;
                     }
             
                     python.ex`hue_plus.hue.custom(ser, 0, 1, ${c1}, "fixed", 0)`
@@ -404,45 +403,145 @@ function setColorAll(r, g, b, o = {}) {
     }
 
     if (!o.no_logitech) {
-        if (o.logitech_boost) {
-            if (r > maxR) maxR = r;
-            if (g > maxG) maxG = g;
-            if (b > maxB) maxB = b;
+        if (o.music) {
+            let lr, lg, lb;
 
-            logitech.SetColor(
-                map(r, 0, maxR, 0, 94),
-                map(g, 0, maxG, 0, 94),
-                map(b, 0, maxB, 0, 94)
+            lr = ((map(r, 0, 255, 0, 94) * 2.5));
+            lg = ((map(g, 0, 255, 0, 94) * 5));
+            lb = ((map(b, 0, 255, 0, 94) * 5));
+
+            if (lr > 100) lr = 100;
+            if (lg > 100) lg = 100;
+            if (lb > 100) lb = 100;
+
+            logitech.SetColorZone(
+                3, 0,
+                lr,
+                0,
+                0
+            );
+
+            logitech.SetColorZone(
+                3, 1,
+                lr,
+                lg,
+                lb
             );
         } else {
-            if (o.per_key && app.lightning[KEY.LOGITECH]) {
+            if (o.logitech_boost) {
+                if (r > maxR) maxR = r;
+                if (g > maxG) maxG = g;
+                if (b > maxB) maxB = b;
+
                 logitech.SetColor(
-                    map(app.lightning[KEY.LOGITECH][0], 0, 255, 0, 94),
-                    map(app.lightning[KEY.LOGITECH][1], 0, 255, 0, 94),
-                    map(app.lightning[KEY.LOGITECH][2], 0, 255, 0, 94)
+                    map(r, 0, maxR, 0, 94),
+                    map(g, 0, maxG, 0, 94),
+                    map(b, 0, maxB, 0, 94)
                 );
             } else {
-                if (o.bass_only || o.logitech_bass_only) {
+                if (o.per_key && app.lightning[KEY.LOGITECH]) {
                     logitech.SetColor(
-                        map(r, 0, 255, 0, 94),
-                        0,
-                        0
+                        map(app.lightning[KEY.LOGITECH][0], 0, 255, 0, 94),
+                        map(app.lightning[KEY.LOGITECH][1], 0, 255, 0, 94),
+                        map(app.lightning[KEY.LOGITECH][2], 0, 255, 0, 94)
                     );
                 } else {
-                    logitech.SetColor(
-                        map(r, 0, 255, 0, 94),
-                        map(g, 0, 255, 0, 94),
-                        map(b, 0, 255, 0, 94)
-                    );
+                    if (o.bass_only || o.logitech_bass_only) {
+                        logitech.SetColor(
+                            map(r, 0, 255, 0, 94),
+                            0,
+                            0
+                        );
+                    } else {
+                        if (o.logitech_channel === 1) {
+                            logitech.SetColorZone(
+                                3, 0,
+                                map(r, 0, 255, 0, 94),
+                                map(g, 0, 255, 0, 94),
+                                map(b, 0, 255, 0, 94)
+                            );
+                        } else if (o.logitech_channel === 2) {
+                            logitech.SetColorZone(
+                                3, 1,
+                                map(r, 0, 255, 0, 94),
+                                map(g, 0, 255, 0, 94),
+                                map(b, 0, 255, 0, 94)
+                            );
+                        } else {
+                            logitech.SetColor(
+                                map(r, 0, 255, 0, 94),
+                                map(g, 0, 255, 0, 94),
+                                map(b, 0, 255, 0, 94)
+                            );
+                        }
+                    }
                 }
-            }
+            }   
         }
         
         app.mqtt.publish("device/logitech/rgb/set", JSON.stringify({ r, g, b }));
+        app.mqtt.publish("device/logitech/1/rgb/set", JSON.stringify({ r, g, b }));
+        app.mqtt.publish("device/logitech/2/rgb/set", JSON.stringify({ r, g, b }));
     }
 
-    if (!process.env.NO_ARDUINO && !o.no_arduino) {
-        arduinoRGB.color(r, g, b);
+    if (!process.env.NO_ARDUINO && !o.no_arduino && arduinoStrip) {
+        if (o.music) {
+            if (parseInt(r) > 60) {
+                arduinoStrip.pixel(119).color(`rgb(${parseInt(r)}, ${parseInt(g)}, ${parseInt(b)})`);
+
+                if (r > smooth) {
+                    smooth = parseInt(r);
+                    arduinoStrip.pixel(48).color(`rgb(${parseInt(r)}, 0, 0)`);
+                } else {
+                    smooth -= 10;
+                    let tr = smooth > 0 ? smooth : 0;
+                    arduinoStrip.pixel(48).color(`rgb(${parseInt(tr)}, 0, 0)`);
+                }
+            } else {
+                arduinoStrip.pixel(119).color(`rgb(0, 0, 0)`);
+
+                if (smooth > 0) {
+                    smooth -= 5;
+                    let tr = smooth > 0 ? smooth : 0;
+
+                    arduinoStrip.pixel(48).color(`rgb(${parseInt(tr)}, 0, 0)`);
+                } else {
+                    arduinoStrip.pixel(48).color(`rgb(0, 0, 0)`);
+                }
+            }
+
+            arduinoStrip.shift(1, pixel.BACKWARD, false);
+
+            const skipColor1 = arduinoStrip.pixel(107).color();
+            const skipColor2 = arduinoStrip.pixel(76).color();
+
+            arduinoStrip.pixel(75).color(`rgb(0, 0, 0)`);
+            arduinoStrip.pixel(74).color(`rgb(0, 0, 0)`);
+            arduinoStrip.pixel(73).color(`rgb(${skipColor2.r}, ${skipColor2.g}, ${skipColor2.b})`);
+            arduinoStrip.pixel(106).color(`rgb(0, 0, 0)`);
+            arduinoStrip.pixel(105).color(`rgb(${skipColor1.r}, ${skipColor1.g}, ${skipColor1.b})`);
+            arduinoStrip.pixel(60).color(`rgb(0, 0, 0)`);
+
+            arduinoStrip.show();
+        } else {
+            if ((r == 0 || r === 255) && g == 0 && b == 0) {
+                arduinoStrip.color(`rgb(${parseInt(r)}, ${parseInt(g)}, ${parseInt(b)})`);
+                arduinoStrip.pixel(14).color(`rgb(0, 0, 0)`);
+                arduinoStrip.pixel(15).color(`rgb(0, 0, 0)`);
+                arduinoStrip.pixel(45).color(`rgb(0, 0, 0)`);
+                arduinoStrip.pixel(46).color(`rgb(0, 0, 0)`);
+                arduinoStrip.pixel(59).color(`rgb(0, 0, 0)`);
+                arduinoStrip.pixel(60).color(`rgb(0, 0, 0)`);
+                arduinoStrip.show();
+            } else {
+                arduinoStrip.color(`rgb(0, 0, 0)`);
+                arduinoStrip.show();
+            }
+
+            if (o.per_key) {
+                
+            }
+        }
     }
 
     if (!process.env.NO_HUE && !o.no_hue) {
@@ -660,6 +759,7 @@ function enableScreenSync() {
     effectInterval = setInterval(() => {
         const img = robot.captureScreen();
         const buffer = img.image;
+        const zoneColors = {};
 
         for (let z in SCREEN_ZONES) {
             const zone = SCREEN_ZONES[z];
@@ -680,9 +780,9 @@ function enableScreenSync() {
                     continue;
 
                     if (
-                        parseInt(buffer[index + 0]) < 25 && 
-                        parseInt(buffer[index + 1]) < 25 && 
-                        parseInt(buffer[index + 2]) < 25)
+                        parseInt(buffer[index + 0]) < 10 && 
+                        parseInt(buffer[index + 1]) < 10 && 
+                        parseInt(buffer[index + 2]) < 10)
                     continue;
 
                     count++;
@@ -693,42 +793,42 @@ function enableScreenSync() {
                 }
             }
 
-            const colors = [ parseInt(r / count), parseInt(g / count), parseInt(b / count) ]
+            const colors = [ parseInt(r / count), parseInt(g / count), parseInt(b / count) ];
 
-            if (z === "TOP") {
-                setColorAll(colors[0], colors[1], colors[2], {
-                    no_arduino: true,
-                    no_corsair: true,
-                    no_nzxt: true,
-                    no_logitech: true,
-                    no_aura: false
-                });
-            } else if (z === "CENTER") {
-                setColorAll(colors[0], colors[1], colors[2], {
-                    no_arduino: true,
-                    no_corsair: true,
-                    no_nzxt: true,
-                    no_logitech: false,
-                    no_aura: true
-                });            
-            } else if (z === "RIGHT") {
-                setColorAll(colors[0], colors[1], colors[2], {
-                    no_arduino: true,
-                    no_corsair: true,
-                    no_nzxt: false,
-                    no_logitech: true,
-                    no_aura: true
-                });            
-            } else if (z === "BOTTOM") {
-                setColorAll(colors[0], colors[1], colors[2], {
-                    no_arduino: true,
-                    no_corsair: false,
-                    no_nzxt: true,
-                    no_logitech: true,
-                    no_aura: true
-                });            
-            }
+            zoneColors[z] = colors;
         }
+
+        setColorAll(zoneColors["TOP"][0], zoneColors["TOP"][1], zoneColors["TOP"][2], {
+            no_arduino: true,
+            no_corsair: true,
+            no_nzxt: true,
+            no_logitech: true,
+            no_aura: false
+        });
+
+        setColorAll(zoneColors["CENTER"][0], zoneColors["CENTER"][1], zoneColors["CENTER"][2], {
+            no_arduino: true,
+            no_corsair: true,
+            no_nzxt: true,
+            no_logitech: false,
+            no_aura: true
+        });            
+
+        setColorAll(zoneColors["RIGHT"][0], zoneColors["RIGHT"][1], zoneColors["RIGHT"][2], {
+            no_arduino: false,
+            no_corsair: true,
+            no_nzxt: false,
+            no_logitech: true,
+            no_aura: true
+        });            
+        
+        setColorAll(zoneColors["BOTTOM"][0], zoneColors["BOTTOM"][1], zoneColors["BOTTOM"][2], {
+            no_arduino: true,
+            no_corsair: false,
+            no_nzxt: true,
+            no_logitech: true,
+            no_aura: true
+        });           
 
         lastData = new Date();
     }, speed);
@@ -740,6 +840,24 @@ function enableAudioSync() {
     fs.open(rain_path, 'r', (err, fd) => { rain_file = fd; rain_read(); });
 
     app.mqtt.publish("config/scene/active", "music");
+}
+
+async function enableMusicMode(app) {
+    if (await processExists("Rainmeter.exe"));
+    else {    
+        await cmd.run(`"C:\\Program Files\\Rainmeter\\Rainmeter.exe"`);
+    }
+
+    await cmd.run(`"C:\Program Files\Rainmeter\Rainmeter.exe" !Refresh RGBToText`);
+
+    if (await processExists("Google Play Music Desktop Player.exe"));
+    else {    
+        await cmd.run(`"C:\\Users\\abhis\\AppData\\Local\\GPMDP_3\\app-4.6.1\\Google Play Music Desktop Player.exe"`);
+
+        await app.gpmdp.retryConnection();
+    }
+
+    await app.gpmdp.control.playPause();
 }
 
 function disableEffect(o = {}) {
@@ -795,13 +913,13 @@ function rain_process(err, count, buff) {
             data[1] += parseFloat(parts[i].split("=")[1]);
         }
 
-        data[1] /= (mids[0] + mids[1] + 3);
+        data[1] /= (mids[0] + mids[1]);
 
         for (let i = highs[0]; i < highs[1]; i++) {
             data[2] += parseFloat(parts[i].split("=")[1]);
         }
 
-        data[2] /= (highs[0] + highs[1] + 3);
+        data[2] /= (highs[0] + highs[1]);
     
         colors = [ data[0], data[1], data[2] ];
 
@@ -855,16 +973,23 @@ function rain_process(err, count, buff) {
     rain_lastG = colors[1];
     rain_lastB = colors[2];
 
+    colors[0] = map(colors[0], 0, 1.00, 0, 255);
+    colors[1] = map(colors[1], 0, 1.00, 0, 255);
+    colors[2] = map(colors[2], 0, 1.00, 0, 255);
+
+    colors[0] = colors[0] > 255 ? 255 : colors[0];
+    colors[1] = colors[1] > 255 ? 255 : colors[1];
+    colors[2] = colors[2] > 255 ? 255 : colors[2];
+
     setColorAll(
-        map(colors[0], 0, 1.00, 0, 255),
-        map(colors[1], 0, 1.00, 0, 255),
-        map(colors[2], 0, 1.00, 0, 255),
+        colors[0], colors[1], colors[2],
         {
             corsair_per_key: perKey,
             bass_only: false,
             nzxt_bass_only: true,
             logitech_bass_only: false,
-            hue_bri_max: 32
+            hue_bri_max: 32,
+            music: true
         }
     );
 
@@ -983,7 +1108,8 @@ function changeEffect(value, params) {
 app.on('mqtt-connect', () => {
     app.mqtt.subscribeList([
         "device/desk/rgb",
-        "device/logitech/rgb",
+        "device/logitech/1/rgb",
+        "device/logitech/2/rgb",
         "device/corsair/rgb",
         "device/nzxt/1/rgb",
         "device/nzxt/2/rgb",
@@ -1001,8 +1127,17 @@ app.on('mqtt-config/scene/active', (data) => {
 app.on('mqtt-config/scene', (data) => {
     const scene = data.toString();
 
+    log("Scene MQTT:", scene);
+
+    disableEffect();
+
     if (scene === 'music') {
         enableAudioSync(app);
+    } else if (scene === 'music_mode') {
+        enableMusicMode(app);
+        enableAudioSync(app);
+    } else if (scene === "screen") {
+        enableScreenSync(app);
     }
 })
 
@@ -1013,7 +1148,7 @@ app.on('mqtt-device/desk/rgb', (data) => {
     effectFlag = true;
 
     setColorAll(colors.r, colors.g, colors.b, {
-        no_arduino: true,
+        no_arduino: false,
         no_corsair: true,
         no_hue: true,
         no_logitech: true,
@@ -1021,7 +1156,7 @@ app.on('mqtt-device/desk/rgb', (data) => {
     })
 });
 
-app.on('mqtt-device/logitech/rgb', (data) => {
+app.on('mqtt-device/logitech/1/rgb', (data) => {
     const colors = parseMqttColors(data)  
 
     disableEffect();
@@ -1032,7 +1167,24 @@ app.on('mqtt-device/logitech/rgb', (data) => {
         no_corsair: true,
         no_hue: true,
         no_nzxt: true,
-        no_aura: true
+        no_aura: true,
+        logitech_channel: 1
+    })
+});
+
+app.on('mqtt-device/logitech/2/rgb', (data) => {
+    const colors = parseMqttColors(data)  
+
+    disableEffect();
+    effectFlag = true;
+    
+    setColorAll(colors.r, colors.g, colors.b, {
+        no_arduino: true,
+        no_corsair: true,
+        no_hue: true,
+        no_nzxt: true,
+        no_aura: true,
+        logitech_channel: 2
     })
 });
 

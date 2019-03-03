@@ -311,7 +311,8 @@ class CueSDK {
     _error() {
         this.lastError = this.CueSDKLib.CorsairGetLastError()
         if (this.lastError != 'CE_Success' && this.lastError != 0) {
-            throw new CueError(this.lastError)
+            if (this.lastError === "CE_NoControl") return;
+            // throw new CueError(this.lastError)
         }
     }
 }
