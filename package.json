@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node-gyp configure build --arch=ia32",
     "babel-node": "babel-node --presets=env",
-    "dev": "cross-env DEBUG=app* NODE_ENV=development HUE_USER=EI13xkvWoRXCpXyzarYVMNBH8PVZATasmIbXk67w HUE_IP=192.168.0.202 MQTT_SERVER=192.168.0.200:1883 npm run babel-node -- .",
+    "dev": "cross-env DEBUG=app* NO_ARDUINO=true NODE_ENV=development HUE_USER=EI13xkvWoRXCpXyzarYVMNBH8PVZATasmIbXk67w HUE_IP=192.168.0.202 MQTT_SERVER=192.168.0.200:1883 npm run babel-node -- .",
     "start": "cross-env HUE_USER=EI13xkvWoRXCpXyzarYVMNBH8PVZATasmIbXk67w HUE_IP=192.168.0.202 MQTT_SERVER=192.168.0.200:1883 npm run babel-node -- .",
     "tunnel": "tunnel.bat"
   },

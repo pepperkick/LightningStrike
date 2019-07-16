@@ -176,7 +176,10 @@ async function init() {
     try {
         await servgen.init(app, `${__dirname}/modules`, [ 'config', 'prefs', 'cli' ]);
 
-        // enableRainbow(app);
+        if (process.env.NODE_ENV === "development") {
+            enableAudioSync(app);
+        }
+
         startPipes();    
     } catch (error) {
         log(error);
@@ -486,41 +489,11 @@ function setColorAll(r, g, b, o = {}) {
 
     if (!process.env.NO_ARDUINO && !o.no_arduino && arduinoStrip) {
         if (o.music) {
-            if (parseInt(r) > 60) {
-                arduinoStrip.pixel(119).color(`rgb(${parseInt(r)}, ${parseInt(g)}, ${parseInt(b)})`);
-
-                if (r > smooth) {
-                    smooth = parseInt(r);
-                    arduinoStrip.pixel(48).color(`rgb(${parseInt(r)}, 0, 0)`);
-                } else {
-                    smooth -= 10;
-                    let tr = smooth > 0 ? smooth : 0;
-                    arduinoStrip.pixel(48).color(`rgb(${parseInt(tr)}, 0, 0)`);
-                }
-            } else {
-                arduinoStrip.pixel(119).color(`rgb(0, 0, 0)`);
-
-                if (smooth > 0) {
-                    smooth -= 5;
-                    let tr = smooth > 0 ? smooth : 0;
-
-                    arduinoStrip.pixel(48).color(`rgb(${parseInt(tr)}, 0, 0)`);
-                } else {
-                    arduinoStrip.pixel(48).color(`rgb(0, 0, 0)`);
-                }
-            }
-
-            arduinoStrip.shift(1, pixel.BACKWARD, false);
-
-            const skipColor1 = arduinoStrip.pixel(107).color();
-            const skipColor2 = arduinoStrip.pixel(76).color();
-
+            arduinoStrip.color(`rgb(${parseInt(r)}, 0, 0)`);
+            arduinoStrip.pixel(60).color(`rgb(0, 0, 0)`);
             arduinoStrip.pixel(75).color(`rgb(0, 0, 0)`);
             arduinoStrip.pixel(74).color(`rgb(0, 0, 0)`);
-            arduinoStrip.pixel(73).color(`rgb(${skipColor2.r}, ${skipColor2.g}, ${skipColor2.b})`);
             arduinoStrip.pixel(106).color(`rgb(0, 0, 0)`);
-            arduinoStrip.pixel(105).color(`rgb(${skipColor1.r}, ${skipColor1.g}, ${skipColor1.b})`);
-            arduinoStrip.pixel(60).color(`rgb(0, 0, 0)`);
 
             arduinoStrip.show();
         } else {
@@ -893,7 +866,7 @@ function rain_read() {
 }
 
 function rain_process(err, count, buff) {
-    const delay = 50;
+    const delay = 25;
     const info = buff.toString('utf-8', 0, count);
     const perKey = true;
     let colors;
