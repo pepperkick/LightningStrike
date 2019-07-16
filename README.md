@@ -8,10 +8,10 @@ This program was made specifically for my PC, using this may not work for you wi
 
 ## Devices Tested
 
-Asus Aura - Motherboard / 5050 LED Strip
-Logitech - G633
-Corsair - K95 Platinum
-NZXT - Hue+
+- Asus Aura: Motherboard / 5050 LED Strip
+- Logitech: G633
+- Corsair: K95 Platinum
+- NZXT: Hue+
 
 ## Snippets
 
